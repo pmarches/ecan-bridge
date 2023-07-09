@@ -11,12 +11,15 @@ ecane01-cli.py scan -n enp58s0f1
 Configuration of the gateway
 ---
 
-1- Read the configuration from the gateway into a TOML file. 
+* Read the configuration from the gateway into a TOML file. 
 ```
-ecane01-cli.py readconf -i 192.168.4.101 
+ecane01-cli.py readconf -i 192.168.4.101 > config.toml
 ```
-2-Edit the TOML file for your purpose 
-3-Write the changes back to the device. (not yet implemented)
+* Edit the TOML file for your purpose 
+* Write the changes back to the device. (not yet implemented)
+```
+ecane01-cli.py writeconf -i 192.168.4.101 < config.toml
+```
 
 
 Bridging to a virtual CANBus interface (vcan)
