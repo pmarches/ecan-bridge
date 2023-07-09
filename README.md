@@ -16,7 +16,7 @@ Configuration of the gateway
 ecane01-cli.py readconf -i 192.168.4.101 > config.toml
 ```
 * Edit the TOML file for your purpose 
-* Write the changes back to the device. (not yet implemented)
+* Write the changes back to the device. (*not yet implemented*)
 ```
 ecane01-cli.py writeconf -i 192.168.4.101 < config.toml
 ```
