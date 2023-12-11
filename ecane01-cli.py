@@ -22,11 +22,19 @@ ECAN_GATEWAY_CAN2_TCP_PORT=8882
 class GatewayCANConfig:
     def totoml(self):
         canTable = tomlkit.table()
-        canTable.add('mystery1', str(binascii.hexlify(self.mystery1)))
+        canTable.add('mystery1', self.mystery1)
+        canTable.add('emptyCacheWhenConnected', self.emptyCacheWhenConnected)
+        canTable.add('somethingEveryPacket', self.somethingEveryPacket)
+        canTable.add('timeoutBetween2Packets', self.timeoutBetween2Packets)
+        canTable.add('bitrateThousand', self.bitrateThousand)
+        canTable.add('mystery11', str(binascii.hexlify(self.mystery11)))
         canTable.add('remoteIp', self.remoteIp)
         canTable.add('remotePort', self.remotePort)
         canTable.add('localPort', self.localPort)
+        canTable.add('mysteryByte', self.mysteryByte)
+        canTable.add('operationMode', self.operationMode) #0=TCP Server,1=TCP Client, 2=UDP SErver 3=UDP Client
         canTable.add('mystery2', str(binascii.hexlify(self.mystery2)))
+        canTable.add('connectionTimeout', self.connectionTimeout)
         canTable.add('mystery3', str(binascii.hexlify(self.mystery3)))
         canTable.add('registrationMessage', self.registrationMessage)
         canTable.add('keepAliveMessage', self.keepAliveMessage)
@@ -117,6 +125,7 @@ def connectToGatewayByIp(deviceIpAddr):
 
 def resolveMacAddress(deviceIpAddr):
     udpSocket = connectToGatewayByIp(deviceIpAddr)
+    udpSocket.settimeout(None)
     deviceIpAndPort=(deviceIpAddr, ECAN_GATEWAY_UDP_PORT)
     (_,deviceMacAddress) = getBasicInfoFromGateway(udpSocket, deviceIpAndPort)
     return (udpSocket,deviceIpAndPort, deviceMacAddress)
@@ -152,15 +161,33 @@ class ProprietaryConfigFileReader:
 
     def parseConfigurationCANChannel(configurationCANChannelBytes, canConfig):
         debug('configurationCANChannelBytes %s', binascii.hexlify(configurationCANChannelBytes))
-        parts=struct.unpack('12s128s4sII6s134s132s', configurationCANChannelBytes)
+        #   5000Kps=0001 27 0c 0a00 0c0304000000
+        #  10000Kps=0001 27 0c 0500 0c0304000000
+        #  20000Kps=0001 27 0c 3200 0c0304000000
+        #  30000Kps=0001 27 0c 1400 0c0304000000
+        # 100000Kps=0001 27 0c 7d00 0c0304000000
+        # 125000Kps=0001 27 0c 7d00 0c0304000000
+        # 250000Kps=0001 27 0c f401 0c0304000000
+        # 500000Kps=0001 27 0c fa00 0c0304000000
+        # 800000Kps=0001 27 0c e803 0c0304000000
+        #1000000Kps=0001 27 0c 2003 0c0304000000
+        parts=struct.unpack('BBBBH6s128sBB2sIIH4s134s132s', configurationCANChannelBytes)
         canConfig.mystery1=parts[0]
-        canConfig.remoteIp=parts[1].decode('ascii').rstrip('\x00')
-        canConfig.mystery2=parts[2]
-        canConfig.remotePort=parts[3]
-        canConfig.localPort=parts[4]
-        canConfig.mystery3=parts[5]
-        canConfig.registrationMessage=parts[6].decode('ascii').rstrip('\x00')
-        canConfig.keepAliveMessage=parts[7].decode('ascii').rstrip('\x00')
+        canConfig.emptyCacheWhenConnected=parts[1]
+        canConfig.somethingEveryPacket=parts[2] #Range 1-39
+        canConfig.timeoutBetween2Packets=parts[3] #Range 12-255
+        canConfig.bitrateThousand=parts[4]
+        canConfig.mystery11=parts[5]
+        canConfig.remoteIp=parts[6].decode('ascii').rstrip('\x00')
+        canConfig.mysteryByte=parts[7]
+        canConfig.operationMode=parts[8]
+        canConfig.mystery2=parts[9]
+        canConfig.remotePort=parts[10]
+        canConfig.localPort=parts[11]
+        canConfig.connectionTimeout=parts[12]
+        canConfig.mystery3=parts[13]
+        canConfig.registrationMessage=parts[14].decode('ascii').rstrip('\x00')
+        canConfig.keepAliveMessage=parts[15].decode('ascii').rstrip('\x00')
     
     
     def parseConfigurationFile(inputfilepath):
@@ -198,10 +225,10 @@ def readConfiguration(deviceIpAddr):
     config=GatewayConfiguration()
     ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes[2:], config)
 
-    configuration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
+    configuration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
     ProprietaryConfigFileReader.parseConfigurationCANChannel(configuration1Bytes[2:], config.can1)
 
-    configuration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
+    configuration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
     ProprietaryConfigFileReader.parseConfigurationCANChannel(configuration2Bytes[2:], config.can2)
 
     udpSocket.close()
@@ -253,11 +280,12 @@ def doBridge(channelName, gatewayAddress, gatewayPort):
     info("Starting bridge on virtual can device %s and gateway %s port %d", channelName, gatewayAddress, gatewayPort)
     
     sockettogateway=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sockettogateway.settimeout(10)
+    #sockettogateway.settimeout(10)
     sockettogateway.connect((gatewayAddress, gatewayPort))
     sockettogateway.setblocking(False)
     
     bus = can.interface.Bus(bustype='socketcan', channel=channelName)
+    nodatacount=0
     while(True):
         try:
             DATA_FRAME_LEN=13
@@ -265,18 +293,29 @@ def doBridge(channelName, gatewayAddress, gatewayPort):
             debug("Got a data frame from the gateway: %s", str(binascii.hexlify(gatewayFormatFrame)))
             msg=convertGatewayFormatToCANBusFrame(gatewayFormatFrame)
             bus.send(msg)
+            nodatacount=0
         except BlockingIOError:
             debug("No data to read on the IP socket side")
-            #debug("Waiting for some IO event")
-            #select.select([bus,sockettogateway], [bus,sockettogateway], []) 
+            nodatacount+=1
+        except ConnectionResetError:
+            error("Connnection was closed by peer. Connecting again")
+            sockettogateway.close()
+            sockettogateway.connect((gatewayAddress, gatewayPort))
+            #exit(1)
         
-        CANBusFrame=bus.recv(0.01)
+        CANBusFrame=bus.recv(0)
         if(CANBusFrame is None):
             debug("No data to read on the canbus side")
+            nodatacount+=1
+        elif(CANBusFrame.arbitration_id==0):
+            pass
         else:
+            nodatacount=0
             debug("Got %s from canbus", CANBusFrame)
             gatewayCompatibleBytes=convertCANBusFrameToGatewayFormat(CANBusFrame)
             sockettogateway.send(gatewayCompatibleBytes)
+            
+        if(nodatacount>0): time.sleep(0.1)
         
     bus.shutdown()
     sockettogateway.close()
@@ -292,7 +331,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--port', type=int, default=ECAN_GATEWAY_CAN1_TCP_PORT, help='TCP port of the CANBus gateway')
     parser.add_argument('-f', '--inputfile', help='TOML Configuration file to be used as input')
     parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbose output')
-    parser.add_argument('action', choices=['scan','reboot','readconf','writeconf','bridge'])
+    parser.add_argument('action', choices=['scan','reboot','readconf','writeconf','bridge', 'capture'])
     args = parser.parse_args()
     if(args.verbose==0):
         logging.basicConfig(level=logging.ERROR)
@@ -326,10 +365,20 @@ if __name__ == '__main__':
         error("Not implemented yet")
         exit(1)
     elif args.action=='reboot':
-        rebootGateway(args.ipaddress)
+        if(args.ipaddress):
+            rebootGateway(args.ipaddress)
+        else:
+            error("You must specify the gateway address with the -i flag")
+            exit(1)            
     elif args.action=='bridge':
-        if(args.ipaddress and args.port):
+        if(args.canbus and args.ipaddress and args.port):
             doBridge(args.canbus, args.ipaddress, args.port)
+        else:
+            error("You must specify the gateway address with the -i flag and its port with the -p flag. The canbus can be specified with -c")
+            exit(1)
+    elif args.action=='capture':
+        if(args.ipaddress and args.port):
+            doCapture(args.ipaddress, args.port)
         else:
             error("You must specify the gateway address with the -i flag and its port with the -p flag")
             exit(1)
