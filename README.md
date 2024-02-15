@@ -21,6 +21,8 @@ ecane01-cli.py readconf -i 192.168.4.101 > config.toml
 ecane01-cli.py writeconf -i 192.168.4.101 < config.toml
 ```
 
+Tricky settings:
+The configuration application is not very well made and it is hard to know what each settings are for. I was getting problems with the bridge mode working for a few minutes, then no more packets would come from the device. If I change the setting "out time between 2 pack" to 255 I no longer get this. It used to be set to 2, but low traffic might be triggering some timeout condition.
 
 Bridging to a virtual CANBus interface (vcan)
 ---

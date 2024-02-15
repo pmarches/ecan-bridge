@@ -1,6 +1,8 @@
 #!/bin/env python3
 import socket
+import select
 import binascii
+import pickle
 import struct
 import argparse
 from enum import Enum
@@ -13,13 +15,36 @@ import logging
 import time
 import os
 import select
+from fastcrc import crc16
 
 ECAN_CLIENT_UDP_PORT=1902
 ECAN_GATEWAY_UDP_PORT=1901
 ECAN_GATEWAY_CAN1_TCP_PORT=8881
 ECAN_GATEWAY_CAN2_TCP_PORT=8882
 
-class GatewayCANConfig:
+class GatewayCANChannelConfiguration:
+    def fromTOML(doc):
+        obj=GatewayCANChannelConfiguration()
+        obj.mystery1=doc['mystery1']
+        obj.emptyCacheWhenConnected=doc['emptyCacheWhenConnected']
+        obj.somethingEveryPacket=doc['somethingEveryPacket']
+        obj.timeoutBetween2Packets=doc['timeoutBetween2Packets']
+        obj.bitrateThousand=doc['bitrateThousand']
+        obj.mystery11=bytes.fromhex(doc['mystery11'])
+        obj.remoteIp=doc['remoteIp']
+        obj.remotePort=doc['remotePort']
+        obj.localPort=doc['localPort']
+        obj.mysteryByte=doc['mysteryByte']
+        obj.operationMode=doc['operationMode']
+        obj.mystery2=bytes.fromhex(doc['mystery2'])
+        obj.connectionTimeout=doc['connectionTimeout']
+        obj.mystery3=bytes.fromhex(doc['mystery3'])
+        obj.registrationMessage=doc['registrationMessage']
+        obj.mystery4=doc['mystery4']
+        obj.keepAliveMessage=doc['keepAliveMessage']
+        
+        return obj
+    
     def totoml(self):
         canTable = tomlkit.table()
         canTable.add('mystery1', self.mystery1)
@@ -27,29 +52,77 @@ class GatewayCANConfig:
         canTable.add('somethingEveryPacket', self.somethingEveryPacket)
         canTable.add('timeoutBetween2Packets', self.timeoutBetween2Packets)
         canTable.add('bitrateThousand', self.bitrateThousand)
-        canTable.add('mystery11', str(binascii.hexlify(self.mystery11)))
+        canTable.add('mystery11', bytes.hex(self.mystery11))
         canTable.add('remoteIp', self.remoteIp)
         canTable.add('remotePort', self.remotePort)
         canTable.add('localPort', self.localPort)
         canTable.add('mysteryByte', self.mysteryByte)
         canTable.add('operationMode', self.operationMode) #0=TCP Server,1=TCP Client, 2=UDP SErver 3=UDP Client
-        canTable.add('mystery2', str(binascii.hexlify(self.mystery2)))
+        canTable.add('mystery2', bytes.hex(self.mystery2))
         canTable.add('connectionTimeout', self.connectionTimeout)
-        canTable.add('mystery3', str(binascii.hexlify(self.mystery3)))
+        canTable.add('mystery3', bytes.hex(self.mystery3))
         canTable.add('registrationMessage', self.registrationMessage)
+        canTable.add('mystery4', self.mystery4)
         canTable.add('keepAliveMessage', self.keepAliveMessage)
         return canTable
+    
+    def __eq__(self, other):
+        if self.mystery1!=other.mystery1: return False
+        if self.emptyCacheWhenConnected!=other.emptyCacheWhenConnected: return False
+        if self.somethingEveryPacket!=other.somethingEveryPacket: return False
+        if self.timeoutBetween2Packets!=other.timeoutBetween2Packets: return False
+        if self.bitrateThousand!=other.bitrateThousand: return False
+        if self.mystery11!=other.mystery11: return False
+        if self.remoteIp!=other.remoteIp: return False
+        if self.remotePort!=other.remotePort: return False
+        if self.localPort!=other.localPort: return False
+        if self.mysteryByte!=other.mysteryByte: return False
+        if self.operationMode!=other.operationMode: return False
+        if self.mystery2!=other.mystery2: return False
+        if self.connectionTimeout!=other.connectionTimeout: return False
+        if self.mystery3!=other.mystery3: return False
+        if self.registrationMessage!=other.registrationMessage: return False
+        if self.keepAliveMessage!=other.keepAliveMessage: return False
+        return True
+
 
 class GatewayConfiguration:
     def __init__(self):
-        self.can1=GatewayCANConfig()
-        self.can2=GatewayCANConfig()
+        self.can1=GatewayCANChannelConfiguration()
+        self.can2=GatewayCANChannelConfiguration()
+
+    def fromTOML(tomlString):
+        doc=tomlkit.parse(tomlString)
+        obj=GatewayConfiguration()
+        obj.mystery0=binascii.unhexlify(doc['mystery0'])
+
+        obj.macadress=doc['macadress']
+        obj.serialNumber=doc['serialNumber']
+        obj.firmwareVersion=doc['firmwareVersion']
+        obj.deviceModel=doc['devicemodel']
+        
+        obj.deviceName=doc['deviceName']
+        obj.localStaticIp=doc['localStaticIp']
+        obj.gateway=doc['gateway']
+        obj.netmask=doc['netmask']
+        obj.dns=doc['dns']
+        
+        obj.reportCycle=doc['reportCycle']
+        obj.reportTargetIp=doc['reportTargetIp']
+        obj.reportTargetPort=doc['reportTargetPort']
+        obj.reconnectionTimeout=doc['reconnectionTimeout']
+        obj.noCANDataAutoReboot=doc['noCANDataAutoReboot']
+
+        obj.can1=GatewayCANChannelConfiguration.fromTOML(doc['can1'])
+        obj.can2=GatewayCANChannelConfiguration.fromTOML(doc['can2'])
+        return obj
+
 
     def totoml(self):
         doc = tomlkit.document()
         doc.add(tomlkit.comment("ECAN-E01 Configuration file in TOML format. Generated by the command: <CMD HERE>"))
         doc.add(tomlkit.nl())
-        doc.add('mystery0', str(binascii.hexlify(self.mystery0)))
+        doc.add('mystery0', bytes.hex(self.mystery0))
         doc.add(tomlkit.nl())
 
         doc.add('macadress', self.macadress)
@@ -84,9 +157,32 @@ class GatewayConfiguration:
         doc.add('can2', self.can2.totoml())
 
         return tomlkit.dumps(doc)
+    
+    def __eq__(self, other):
+        if self.mystery0!=other.mystery0: return False
+        if self.macadress!=other.macadress : return False
+        if self.serialNumber!=other.serialNumber : return False
+        if self.firmwareVersion!=other.firmwareVersion : return False
+        if self.deviceModel!=other.deviceModel : return False
+        if self.deviceName!=other.deviceName : return False
+        if self.localStaticIp!=other.localStaticIp : return False
+        if self.gateway!=other.gateway : return False
+        if self.netmask!=other.netmask : return False
+        if self.dns!=other.dns : return False
+        
+        if self.reportCycle!=other.reportCycle : return False
+        if self.reportTargetIp!=other.reportTargetIp : return False
+        if self.reportTargetPort!=other.reportTargetPort : return False
+        if self.reconnectionTimeout!=other.reconnectionTimeout : return False
+        if self.noCANDataAutoReboot!=other.noCANDataAutoReboot : return False
+        
+        if self.can1!=other.can1 : return False
+        if self.can2!=other.can2 : return False
+        return True
+
 
 def parseMacAddressFromGateway(dataFromGateway):
-    debug('RX %s : %s',binascii.hexlify(dataFromGateway))
+    debug('parseMacAddressFromGateway : %s',binascii.hexlify(dataFromGateway))
     (magic,action)=struct.unpack('BB', dataFromGateway[0:2])
     if(magic==0xFD and action==0x06):
         (macbytes,mystery)=struct.unpack('6s2s', dataFromGateway[2:])
@@ -133,14 +229,18 @@ def resolveMacAddress(deviceIpAddr):
 class ProprietaryConfigFileReader:
     MAINCONFIG_BYTES_SIZE=240
     CANCHANNEL_BYTE_SIZE=424
+    CONFIG_ZERO_STRUCT_FORMAT='2s32s11sBBBBBB11s26s4s4s4s4sB129sHHH';
+    CONFIG_ONE_STRUCT_FORMAT='BBBBH6s128sBB2sIIH4s132sH132s'
     
     def ipBytesToStr(ipBytes):
         return socket.inet_ntoa(ipBytes)
-    
-    def parseConfigurationZero(responseBytes, config):
-        debug('responseBytes %s', binascii.hexlify(responseBytes))
 
-        parts=struct.unpack('2s32s11sBBBBBB11s26s4s4s4s4sB129sHHH', responseBytes)
+    def strToIPBytes(ipString):
+        return socket.inet_aton(ipString)
+    
+    def parseConfigurationZero(configurationBytes, config):
+        debug('parseConfigurationZero %s', binascii.hexlify(configurationBytes))
+        parts=struct.unpack(ProprietaryConfigFileReader.CONFIG_ZERO_STRUCT_FORMAT, configurationBytes)
         config.mystery0=parts[0]
         config.deviceModel=parts[1].decode('ascii').rstrip('\x00')
         config.firmwareVersion=parts[2].decode('ascii').rstrip('\x00')
@@ -158,20 +258,37 @@ class ProprietaryConfigFileReader:
         config.reportTargetPort=parts[17]
         config.reconnectionTimeout=parts[18]
         config.noCANDataAutoReboot=parts[19]
+        
+    def buildConfigurationZero(config):
+        macadressBytes=binascii.unhexlify(config.macadress.replace(':',''))
+        outBytes=bytearray().zfill(240)
+        struct.pack_into(ProprietaryConfigFileReader.CONFIG_ZERO_STRUCT_FORMAT, outBytes, 0,
+            config.mystery0, 
+            config.deviceModel.encode('ascii'), 
+            config.firmwareVersion.encode('ascii'), 
+            macadressBytes[0],
+            macadressBytes[1],
+            macadressBytes[2],
+            macadressBytes[3],
+            macadressBytes[4],
+            macadressBytes[5],
+            config.deviceName.encode('ascii'), 
+            config.serialNumber.encode('ascii'), 
+            ProprietaryConfigFileReader.strToIPBytes(config.localStaticIp), 
+            ProprietaryConfigFileReader.strToIPBytes(config.gateway),
+            ProprietaryConfigFileReader.strToIPBytes(config.netmask),
+            ProprietaryConfigFileReader.strToIPBytes(config.dns),
+            config.reportCycle,
+            config.reportTargetIp.encode('ascii'),
+            config.reportTargetPort,
+            config.reconnectionTimeout,
+            config.noCANDataAutoReboot
+            )
+        return outBytes
 
     def parseConfigurationCANChannel(configurationCANChannelBytes, canConfig):
         debug('configurationCANChannelBytes %s', binascii.hexlify(configurationCANChannelBytes))
-        #   5000Kps=0001 27 0c 0a00 0c0304000000
-        #  10000Kps=0001 27 0c 0500 0c0304000000
-        #  20000Kps=0001 27 0c 3200 0c0304000000
-        #  30000Kps=0001 27 0c 1400 0c0304000000
-        # 100000Kps=0001 27 0c 7d00 0c0304000000
-        # 125000Kps=0001 27 0c 7d00 0c0304000000
-        # 250000Kps=0001 27 0c f401 0c0304000000
-        # 500000Kps=0001 27 0c fa00 0c0304000000
-        # 800000Kps=0001 27 0c e803 0c0304000000
-        #1000000Kps=0001 27 0c 2003 0c0304000000
-        parts=struct.unpack('BBBBH6s128sBB2sIIH4s134s132s', configurationCANChannelBytes)
+        parts=struct.unpack(ProprietaryConfigFileReader.CONFIG_ONE_STRUCT_FORMAT, configurationCANChannelBytes)
         canConfig.mystery1=parts[0]
         canConfig.emptyCacheWhenConnected=parts[1]
         canConfig.somethingEveryPacket=parts[2] #Range 1-39
@@ -186,11 +303,34 @@ class ProprietaryConfigFileReader:
         canConfig.localPort=parts[11]
         canConfig.connectionTimeout=parts[12]
         canConfig.mystery3=parts[13]
-        canConfig.registrationMessage=parts[14].decode('ascii').rstrip('\x00')
-        canConfig.keepAliveMessage=parts[15].decode('ascii').rstrip('\x00')
+        canConfig.registrationMessage=parts[14].decode('ascii').partition('\x00')[0]
+        canConfig.mystery4=parts[15]
+        canConfig.keepAliveMessage=parts[16].decode('ascii').rstrip('\x00')
+
+    def buildConfigurationCANChannel(canConfig):
+        outBytes=bytearray().zfill(424)
+        struct.pack_into(ProprietaryConfigFileReader.CONFIG_ONE_STRUCT_FORMAT, outBytes, 0,
+            canConfig.mystery1,
+            canConfig.emptyCacheWhenConnected,
+            canConfig.somethingEveryPacket,
+            canConfig.timeoutBetween2Packets,
+            canConfig.bitrateThousand,
+            canConfig.mystery11,
+            canConfig.remoteIp.encode('ascii'),
+            canConfig.mysteryByte,
+            canConfig.operationMode,
+            canConfig.mystery2,
+            canConfig.remotePort,
+            canConfig.localPort,
+            canConfig.connectionTimeout,
+            canConfig.mystery3,
+            canConfig.registrationMessage.encode('ascii'),
+            canConfig.mystery4,
+            canConfig.keepAliveMessage.encode('ascii')
+        )
+        return outBytes;    
     
-    
-    def parseConfigurationFile(inputfilepath):
+    def parseBinaryConfigurationFile(inputfilepath):
         with open(inputfilepath, mode='rb') as inputfile:
             fmt='>II'
             filemagic1,filemagic2=struct.unpack(fmt, inputfile.read(struct.calcsize(fmt)))
@@ -204,7 +344,9 @@ class ProprietaryConfigFileReader:
             inputfile.read(6) #Unknown, in file only
             ProprietaryConfigFileReader.parseConfigurationCANChannel(inputfile.read(ProprietaryConfigFileReader.CANCHANNEL_BYTE_SIZE), config.can2)
             return config
-
+    
+    def convertGatewayConfigurationToBlob(inputConfig):
+        pass
 
 def getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, configurationPage):
     debug('Reading device configuration page %d', configurationPage)
@@ -214,26 +356,73 @@ def getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, configura
     udpSocket.sendto(getBasicConfigurationCmd, deviceIpAndPort)
 
     responseBytes, addr = udpSocket.recvfrom(1024)
-    magic, action, macAddress, configurationSection=struct.unpack('BB6s2s', responseBytes[0:10])
-    configBytes=responseBytes[10:]
-    debug('Got %d bytes of config data', len(configBytes))
+    debug('Got %d bytes of config data', len(responseBytes))
+    debug('responseBytes %s', binascii.hexlify(responseBytes))
+    magic, action, macAddress, configurationSection, rxChecksum=struct.unpack('BB6s2sH', responseBytes[0:12])
+    
+    configBytes=responseBytes[12:]
+    computedChecksum=crc16.modbus(configBytes)
+    if(computedChecksum!=rxChecksum):
+        warn("FAILED checksum computedChecksum %04X rxChecksum=%04X", computedChecksum, rxChecksum)
+
     return configBytes;
 
 def readConfiguration(deviceIpAddr):
     (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
     configuration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
     config=GatewayConfiguration()
-    ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes[2:], config)
+    ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes, config)
 
-    configuration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
-    ProprietaryConfigFileReader.parseConfigurationCANChannel(configuration1Bytes[2:], config.can1)
+    inConfiguration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
+    inConfiguration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
 
-    configuration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
-    ProprietaryConfigFileReader.parseConfigurationCANChannel(configuration2Bytes[2:], config.can2)
+    ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration1Bytes, config.can1)
+    ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration2Bytes, config.can2)
 
     udpSocket.close()
     return config
 
+def writeConfiguration(deviceIpAddr, configTOML):
+    pass
+
+def testWriteConfiguration(deviceIpAddr):
+    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
+    inConfiguration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
+    originalConfigObj=GatewayConfiguration()
+    ProprietaryConfigFileReader.parseConfigurationZero(inConfiguration0Bytes, originalConfigObj)
+
+    inConfiguration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
+    ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration1Bytes, originalConfigObj.can1)
+
+    inConfiguration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
+    ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration2Bytes, originalConfigObj.can2)
+
+    udpSocket.close()
+    userConfigObj=GatewayConfiguration.fromTOML(originalConfigObj.totoml())
+    if(userConfigObj != originalConfigObj):
+        error('userConfigObj=%s', userConfigObj.totoml());
+        error('---------')
+        error('originalConfigObj=%s', originalConfigObj.totoml());
+        raise Exception("toml serialization does not yield the same object")
+        
+
+    outConfiguration0Bytes=ProprietaryConfigFileReader.buildConfigurationZero(userConfigObj)
+    if(inConfiguration0Bytes!=outConfiguration0Bytes):
+        error(' inConfiguration0Bytes %s', binascii.hexlify(inConfiguration0Bytes))
+        error('outConfiguration0Bytes %s', binascii.hexlify(outConfiguration0Bytes))
+        raise Exception("inoutConfiguration0Bytes differ")
+    outConfiguration1Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(userConfigObj.can1)
+    if(inConfiguration1Bytes!=outConfiguration1Bytes):
+        error(' inConfiguration1Bytes %s', binascii.hexlify(inConfiguration1Bytes))
+        error('outConfiguration1Bytes %s', binascii.hexlify(outConfiguration1Bytes))
+        raise Exception("inoutConfiguration1Bytes differ")
+    outConfiguration2Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(userConfigObj.can2)
+    if(inConfiguration2Bytes!=outConfiguration2Bytes):
+        error(' inConfiguration2Bytes %s', binascii.hexlify(inConfiguration2Bytes))
+        error('outConfiguration2Bytes %s', binascii.hexlify(outConfiguration2Bytes))
+        raise Exception("inoutConfiguration2Bytes differ")
+
+    
 def rebootGateway(deviceIpAddr):
     (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
     
@@ -276,48 +465,57 @@ def convertGatewayFormatToCANBusFrame(gatewayFormatBytes):
     debug("gateway format to canbus yields message: %s", msg)
     return msg
 
-def doBridge(channelName, gatewayAddress, gatewayPort):
-    info("Starting bridge on virtual can device %s and gateway %s port %d", channelName, gatewayAddress, gatewayPort)
-    
+def createSocketToGateway(gatewayAddress, gatewayPort):
     sockettogateway=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     #sockettogateway.settimeout(10)
     sockettogateway.connect((gatewayAddress, gatewayPort))
     sockettogateway.setblocking(False)
+    return sockettogateway
     
-    bus = can.interface.Bus(bustype='socketcan', channel=channelName)
-    nodatacount=0
-    while(True):
-        try:
-            DATA_FRAME_LEN=13
-            gatewayFormatFrame=sockettogateway.recv(DATA_FRAME_LEN)
-            debug("Got a data frame from the gateway: %s", str(binascii.hexlify(gatewayFormatFrame)))
-            msg=convertGatewayFormatToCANBusFrame(gatewayFormatFrame)
-            bus.send(msg)
-            nodatacount=0
-        except BlockingIOError:
-            debug("No data to read on the IP socket side")
-            nodatacount+=1
-        except ConnectionResetError:
-            error("Connnection was closed by peer. Connecting again")
-            sockettogateway.close()
-            sockettogateway.connect((gatewayAddress, gatewayPort))
-            #exit(1)
-        
-        CANBusFrame=bus.recv(0)
-        if(CANBusFrame is None):
-            debug("No data to read on the canbus side")
-            nodatacount+=1
-        elif(CANBusFrame.arbitration_id==0):
-            pass
+def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
+    info("Starting bridge on virtual can device %s and gateway %s port %d", canInterfaceName, gatewayAddress, gatewayPort)
+    sockettogateway=createSocketToGateway(gatewayAddress, gatewayPort)
+    
+    try:
+        bus = can.interface.Bus(bustype='socketcan', channel=canInterfaceName)
+        BOTH_SOCKETS=[sockettogateway,bus]
+        while(True):
+            readyTriplet=select.select(BOTH_SOCKETS, [], [], None)
+            #print(readyTriplet)
+            for readySocket in readyTriplet[0]:
+                if(sockettogateway==readySocket):
+                    DATA_FRAME_LEN=13
+                    gatewayFormatFrame=sockettogateway.recv(DATA_FRAME_LEN)
+                    if(len(gatewayFormatFrame)>0):
+                        while(len(gatewayFormatFrame)<DATA_FRAME_LEN):
+                            gatewayFormatFrame+=sockettogateway.recv(DATA_FRAME_LEN-len(gatewayFormatFrame))
+                    debug("Got a data frame from the gateway: %s", str(binascii.hexlify(gatewayFormatFrame)))
+                    if(len(gatewayFormatFrame)==DATA_FRAME_LEN):
+                        msg=convertGatewayFormatToCANBusFrame(gatewayFormatFrame)
+                        bus.send(msg)
+                    else:
+                        raise Exception("Incompleted gateway message received")
+                else:
+                    CANBusFrame=bus.recv(0)
+                    if(CANBusFrame is None):
+                        debug(f"No data to read on the canbus side.")
+                    elif(CANBusFrame.arbitration_id==0):
+                        pass
+                    else:
+                        debug("Got %s from canbus", CANBusFrame)
+                        gatewayCompatibleBytes=convertCANBusFrameToGatewayFormat(CANBusFrame)
+                        sockettogateway.send(gatewayCompatibleBytes)
+
+        bus.shutdown()
+    except OSError as e:
+        if(e.errno==19):
+            error("No such network interface {canInterfaceName}. Maybe you need to configure it with these commands:")
+            print("sudo modprobe vcan");
+            print(f"sudo ip link add dev {canInterfaceName} type vcan bitrate 250000 mtu 16")
+            print(f"sudo ip link set up {canInterfaceName}")
         else:
-            nodatacount=0
-            debug("Got %s from canbus", CANBusFrame)
-            gatewayCompatibleBytes=convertCANBusFrameToGatewayFormat(CANBusFrame)
-            sockettogateway.send(gatewayCompatibleBytes)
-            
-        if(nodatacount>0): time.sleep(0.1)
+            print(e)
         
-    bus.shutdown()
     sockettogateway.close()
 
 if __name__ == '__main__':
@@ -331,14 +529,14 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--port', type=int, default=ECAN_GATEWAY_CAN1_TCP_PORT, help='TCP port of the CANBus gateway')
     parser.add_argument('-f', '--inputfile', help='TOML Configuration file to be used as input')
     parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbose output')
-    parser.add_argument('action', choices=['scan','reboot','readconf','writeconf','bridge', 'capture'])
+    parser.add_argument('action', choices=['scan','reboot','readconf','writeconf','bridge', 'capture', 'test'])
     args = parser.parse_args()
     if(args.verbose==0):
         logging.basicConfig(level=logging.ERROR)
     elif(args.verbose==1):
         logging.basicConfig(level=logging.INFO)
     else:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG, style='{', datefmt='%Y-%m-%d %H:%M:%S', format='{asctime} {levelname} {filename}:{lineno}: {message}')
 
     debug(args)
     
@@ -355,15 +553,21 @@ if __name__ == '__main__':
                 exit(1)
     elif args.action=='readconf':
         if(args.inputfile):
-            print(ProprietaryConfigFileReader.parseConfigurationFile(args.inputfile).totoml())
+            print(ProprietaryConfigFileReader.parseBinaryConfigurationFile(args.inputfile).totoml())
         elif(args.ipaddress):
             print(readConfiguration(args.ipaddress).totoml())
         else:
             error("You must specify either the -f or -a flag for this action")
             exit(1)
     elif args.action=='writeconf':
-        error("Not implemented yet")
-        exit(1)
+        if(args.ipaddress and args.inputfile):
+            configRead=readConfiguration(args.ipaddress).totoml()
+            writeConfiguration(args.ipaddress, configRead)
+        else:
+            error("You must specify the -i and -f flag for writeconf")
+            exit(1)
+            
+        
     elif args.action=='reboot':
         if(args.ipaddress):
             rebootGateway(args.ipaddress)
@@ -382,4 +586,10 @@ if __name__ == '__main__':
         else:
             error("You must specify the gateway address with the -i flag and its port with the -p flag")
             exit(1)
+    elif args.action=='test':
+        if(args.ipaddress):
+            testWriteConfiguration(args.ipaddress)
+        else:
+            error("You must specify the gateway address with the -i flag")
+            exit(1)            
         
