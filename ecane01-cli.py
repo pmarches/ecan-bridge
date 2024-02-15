@@ -212,7 +212,7 @@ def discoverECanGateways(interfaceName):
     return ipAndMac
 
 def connectToGatewayByIp(deviceIpAddr):
-    udpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     udpSocket.bind(('<broadcast>', ECAN_CLIENT_UDP_PORT))
@@ -241,6 +241,7 @@ class ProprietaryConfigFileReader:
     def parseConfigurationZero(configurationBytes, config):
         debug('parseConfigurationZero %s', binascii.hexlify(configurationBytes))
         parts=struct.unpack(ProprietaryConfigFileReader.CONFIG_ZERO_STRUCT_FORMAT, configurationBytes)
+        #import pdb; pdb.set_trace()
         config.mystery0=parts[0]
         config.deviceModel=parts[1].decode('ascii').rstrip('\x00')
         config.firmwareVersion=parts[2].decode('ascii').rstrip('\x00')
@@ -397,13 +398,15 @@ def writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, configu
     writeConfigurationPageCmd.extend(deviceMacAddress)
     writeConfigurationPageCmd.extend(struct.pack('>H', configurationPage))
     computedChecksum=crc16.modbus(configBytes)
-    writeConfigurationPageCmd.extend(struct.pack('>H', computedChecksum))
+    writeConfigurationPageCmd.extend(struct.pack('H', computedChecksum))
     writeConfigurationPageCmd.extend(configBytes)
 
     debug(f'writeConfigurationPageCmd len {len(writeConfigurationPageCmd)}')
     debug('writeConfigurationPageCmd %s', binascii.hexlify(writeConfigurationPageCmd))
-    udpSocket.sendto(writeConfigurationPageCmd, deviceIpAndPort)
-    responseBytes, addr = udpSocket.recvfrom(1024)
+    udpSocket.sendto(writeConfigurationPageCmd, ('<broadcast>', ECAN_GATEWAY_UDP_PORT))
+    #udpSocket.sendto(writeConfigurationPageCmd, ('<broadcast>', ECAN_GATEWAY_UDP_PORT))
+    time.sleep(1)
+    responseBytes, addr = udpSocket.recvfrom(128)
     debug(f'responseBytes len {len(responseBytes)}')
     debug('responseBytes %s', binascii.hexlify(responseBytes))
     
