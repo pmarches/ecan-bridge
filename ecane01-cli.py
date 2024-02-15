@@ -284,7 +284,7 @@ class ProprietaryConfigFileReader:
             config.reconnectionTimeout,
             config.noCANDataAutoReboot
             )
-        return outBytes
+        return bytes(outBytes)
 
     def parseConfigurationCANChannel(configurationCANChannelBytes, canConfig):
         debug('configurationCANChannelBytes %s', binascii.hexlify(configurationCANChannelBytes))
@@ -328,7 +328,7 @@ class ProprietaryConfigFileReader:
             canConfig.mystery4,
             canConfig.keepAliveMessage.encode('ascii')
         )
-        return outBytes;    
+        return bytes(outBytes);
     
     def parseBinaryConfigurationFile(inputfilepath):
         with open(inputfilepath, mode='rb') as inputfile:
@@ -382,8 +382,31 @@ def readConfiguration(deviceIpAddr):
     udpSocket.close()
     return config
 
-def writeConfiguration(deviceIpAddr, configTOML):
-    pass
+def writeConfiguration(deviceIpAddr, configObj):
+    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
+    outConfiguration0Bytes=ProprietaryConfigFileReader.buildConfigurationZero(configObj)
+    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 0, outConfiguration0Bytes)
+    outConfiguration1Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(configObj.can1)
+    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 1, outConfiguration1Bytes)
+    outConfiguration2Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(configObj.can2)
+    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 2, outConfiguration2Bytes)
+
+def writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, configurationPage, configBytes):
+    debug('Writing configuration page %d', configurationPage)
+    writeConfigurationPageCmd=bytearray(b'\xfe\x01')
+    writeConfigurationPageCmd.extend(deviceMacAddress)
+    writeConfigurationPageCmd.extend(struct.pack('>H', configurationPage))
+    computedChecksum=crc16.modbus(configBytes)
+    writeConfigurationPageCmd.extend(struct.pack('>H', computedChecksum))
+    writeConfigurationPageCmd.extend(configBytes)
+
+    debug(f'writeConfigurationPageCmd len {len(writeConfigurationPageCmd)}')
+    debug('writeConfigurationPageCmd %s', binascii.hexlify(writeConfigurationPageCmd))
+    udpSocket.sendto(writeConfigurationPageCmd, deviceIpAndPort)
+    responseBytes, addr = udpSocket.recvfrom(1024)
+    debug(f'responseBytes len {len(responseBytes)}')
+    debug('responseBytes %s', binascii.hexlify(responseBytes))
+    
 
 def testWriteConfiguration(deviceIpAddr):
     (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
@@ -561,8 +584,10 @@ if __name__ == '__main__':
             exit(1)
     elif args.action=='writeconf':
         if(args.ipaddress and args.inputfile):
-            configRead=readConfiguration(args.ipaddress).totoml()
-            writeConfiguration(args.ipaddress, configRead)
+            with open(args.inputfile, 'r') as f:
+                tomlContent=f.read()
+                configRead=GatewayConfiguration.fromTOML(tomlContent)
+                writeConfiguration(args.ipaddress, configRead)
         else:
             error("You must specify the -i and -f flag for writeconf")
             exit(1)
