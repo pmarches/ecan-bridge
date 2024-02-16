@@ -21,6 +21,8 @@ ECAN_CLIENT_UDP_PORT=1902
 ECAN_GATEWAY_UDP_PORT=1901
 ECAN_GATEWAY_CAN1_TCP_PORT=8881
 ECAN_GATEWAY_CAN2_TCP_PORT=8882
+CONF_NUM_PAGE1=2
+CONF_NUM_PAGE2=1
 
 class GatewayCANChannelConfiguration:
     def fromTOML(doc):
@@ -374,8 +376,8 @@ def readConfiguration(deviceIpAddr):
     config=GatewayConfiguration()
     ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes, config)
 
-    inConfiguration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
-    inConfiguration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
+    inConfiguration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, CONF_NUM_PAGE1)
+    inConfiguration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, CONF_NUM_PAGE2)
 
     ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration1Bytes, config.can1)
     ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration2Bytes, config.can2)
@@ -388,9 +390,9 @@ def writeConfiguration(deviceIpAddr, configObj):
     outConfiguration0Bytes=ProprietaryConfigFileReader.buildConfigurationZero(configObj)
     writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 0, outConfiguration0Bytes)
     outConfiguration1Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(configObj.can1)
-    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 1, outConfiguration1Bytes)
+    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, CONF_NUM_PAGE1, outConfiguration1Bytes)
     outConfiguration2Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(configObj.can2)
-    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 2, outConfiguration2Bytes)
+    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, CONF_NUM_PAGE2, outConfiguration2Bytes)
 
 def writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, configurationPage, configBytes):
     debug('Writing configuration page %d', configurationPage)
