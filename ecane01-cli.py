@@ -32,7 +32,9 @@ class GatewayCANChannelConfiguration:
         obj.somethingEveryPacket=doc['somethingEveryPacket']
         obj.timeoutBetween2Packets=doc['timeoutBetween2Packets']
         obj.bitrateThousand=doc['bitrateThousand']
-        obj.mystery11=bytes.fromhex(doc['mystery11'])
+        obj.tbs1=doc['tbs1']
+        obj.tbs2=doc['tbs2']
+        obj.prescaler=doc['prescaler']
         obj.remoteIp=doc['remoteIp']
         obj.remotePort=doc['remotePort']
         obj.localPort=doc['localPort']
@@ -53,8 +55,15 @@ class GatewayCANChannelConfiguration:
         canTable.add('emptyCacheWhenConnected', self.emptyCacheWhenConnected)
         canTable.add('somethingEveryPacket', self.somethingEveryPacket)
         canTable.add('timeoutBetween2Packets', self.timeoutBetween2Packets)
+        
         canTable.add('bitrateThousand', self.bitrateThousand)
-        canTable.add('mystery11', bytes.hex(self.mystery11))
+        canTable.add('tbs1', self.tbs1)
+        canTable['tbs1'].comment("time segment2 must be computed to fit the baud rate according to clock 7.2Mhz; Range 0-15")
+        canTable.add('tbs2', self.tbs2)
+        canTable['tbs2'].comment("time segment1; Range 0-7")
+        canTable.add('prescaler', self.prescaler)
+        canTable['prescaler'].comment("Baud rate prescaler: Range 0-65535")
+        
         canTable.add('remoteIp', self.remoteIp)
         canTable.add('remotePort', self.remotePort)
         canTable.add('localPort', self.localPort)
@@ -74,7 +83,9 @@ class GatewayCANChannelConfiguration:
         if self.somethingEveryPacket!=other.somethingEveryPacket: return False
         if self.timeoutBetween2Packets!=other.timeoutBetween2Packets: return False
         if self.bitrateThousand!=other.bitrateThousand: return False
-        if self.mystery11!=other.mystery11: return False
+        if self.tbs1!=other.tbs1: return False
+        if self.tbs2!=other.tbs2: return False
+        if self.prescaler!=other.prescaler: return False
         if self.remoteIp!=other.remoteIp: return False
         if self.remotePort!=other.remotePort: return False
         if self.localPort!=other.localPort: return False
@@ -232,7 +243,7 @@ class ProprietaryConfigFileReader:
     MAINCONFIG_BYTES_SIZE=240
     CANCHANNEL_BYTE_SIZE=424
     CONFIG_ZERO_STRUCT_FORMAT='2s32s11sBBBBBB11s26s4s4s4s4sB129sHHH';
-    CONFIG_ONE_STRUCT_FORMAT='BBBBH6s128sBB2sIIH4s132sH132s'
+    CONFIG_ONE_STRUCT_FORMAT='BBBBHBBI128sBB2sIIH4s132sH132s'
     
     def ipBytesToStr(ipBytes):
         return socket.inet_ntoa(ipBytes)
@@ -297,18 +308,20 @@ class ProprietaryConfigFileReader:
         canConfig.somethingEveryPacket=parts[2] #Range 1-39
         canConfig.timeoutBetween2Packets=parts[3] #Range 12-255
         canConfig.bitrateThousand=parts[4]
-        canConfig.mystery11=parts[5]
-        canConfig.remoteIp=parts[6].decode('ascii').rstrip('\x00')
-        canConfig.mysteryByte=parts[7]
-        canConfig.operationMode=parts[8]
-        canConfig.mystery2=parts[9]
-        canConfig.remotePort=parts[10]
-        canConfig.localPort=parts[11]
-        canConfig.connectionTimeout=parts[12]
-        canConfig.mystery3=parts[13]
-        canConfig.registrationMessage=parts[14].decode('ascii').partition('\x00')[0]
-        canConfig.mystery4=parts[15]
-        canConfig.keepAliveMessage=parts[16].decode('ascii').rstrip('\x00')
+        canConfig.tbs1=parts[5]
+        canConfig.tbs2=parts[6]
+        canConfig.prescaler=parts[7]
+        canConfig.remoteIp=parts[8].decode('ascii').rstrip('\x00')
+        canConfig.mysteryByte=parts[9]
+        canConfig.operationMode=parts[10]
+        canConfig.mystery2=parts[11]
+        canConfig.remotePort=parts[12]
+        canConfig.localPort=parts[13]
+        canConfig.connectionTimeout=parts[14]
+        canConfig.mystery3=parts[15]
+        canConfig.registrationMessage=parts[16].decode('ascii').partition('\x00')[0]
+        canConfig.mystery4=parts[17]
+        canConfig.keepAliveMessage=parts[18].decode('ascii').rstrip('\x00')
 
     def buildConfigurationCANChannel(canConfig):
         outBytes=bytearray().zfill(424)
@@ -318,7 +331,9 @@ class ProprietaryConfigFileReader:
             canConfig.somethingEveryPacket,
             canConfig.timeoutBetween2Packets,
             canConfig.bitrateThousand,
-            canConfig.mystery11,
+            canConfig.tbs1,
+            canConfig.tbs2,
+            canConfig.prescaler,
             canConfig.remoteIp.encode('ascii'),
             canConfig.mysteryByte,
             canConfig.operationMode,
@@ -406,11 +421,12 @@ def writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, configu
     debug(f'writeConfigurationPageCmd len {len(writeConfigurationPageCmd)}')
     debug('writeConfigurationPageCmd %s', binascii.hexlify(writeConfigurationPageCmd))
     udpSocket.sendto(writeConfigurationPageCmd, ('<broadcast>', ECAN_GATEWAY_UDP_PORT))
-    #udpSocket.sendto(writeConfigurationPageCmd, ('<broadcast>', ECAN_GATEWAY_UDP_PORT))
     time.sleep(1)
     responseBytes, addr = udpSocket.recvfrom(128)
     debug(f'responseBytes len {len(responseBytes)}')
     debug('responseBytes %s', binascii.hexlify(responseBytes))
+    if(len(responseBytes)!=12):
+        warn(f'exptected responseBytes to be 12 bytes long. was {len(responseBytes)} long')
     
 
 def testWriteConfiguration(deviceIpAddr):
@@ -593,6 +609,7 @@ if __name__ == '__main__':
                 tomlContent=f.read()
                 configRead=GatewayConfiguration.fromTOML(tomlContent)
                 writeConfiguration(args.ipaddress, configRead)
+                rebootGateway(args.ipaddress) #Configuration takes effect only on reboot?
         else:
             error("You must specify the -i and -f flag for writeconf")
             exit(1)
