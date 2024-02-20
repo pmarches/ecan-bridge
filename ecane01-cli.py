@@ -1,21 +1,15 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 import socket
 import select
 import binascii
-import pickle
 import struct
 import argparse
-from enum import Enum
-import yaml
 import tomlkit
-import datetime
 import can
 from logging import debug,info,warn,error
 import logging
 import time
 import os
-import select
-from fastcrc import crc16
 
 ECAN_CLIENT_UDP_PORT=1902
 ECAN_GATEWAY_UDP_PORT=1901
@@ -29,7 +23,7 @@ class GatewayCANChannelConfiguration:
         obj=GatewayCANChannelConfiguration()
         obj.mystery1=doc['mystery1']
         obj.emptyCacheWhenConnected=doc['emptyCacheWhenConnected']
-        obj.somethingEveryPacket=doc['somethingEveryPacket']
+        obj.numberOfCANBUSPacketsToBuffer=doc['numberOfCANBUSPacketsToBuffer']
         obj.timeoutBetween2Packets=doc['timeoutBetween2Packets']
         obj.bitrateThousand=doc['bitrateThousand']
         obj.tbs1=doc['tbs1']
@@ -53,14 +47,15 @@ class GatewayCANChannelConfiguration:
         canTable = tomlkit.table()
         canTable.add('mystery1', self.mystery1)
         canTable.add('emptyCacheWhenConnected', self.emptyCacheWhenConnected)
-        canTable.add('somethingEveryPacket', self.somethingEveryPacket)
+        canTable.add('numberOfCANBUSPacketsToBuffer', self.numberOfCANBUSPacketsToBuffer)
+        canTable['numberOfCANBUSPacketsToBuffer'].comment("Acumulate this many canbus packets before sending them over the TCP side")
         canTable.add('timeoutBetween2Packets', self.timeoutBetween2Packets)
         
         canTable.add('bitrateThousand', self.bitrateThousand)
         canTable.add('tbs1', self.tbs1)
-        canTable['tbs1'].comment("time segment2 must be computed to fit the baud rate according to clock 7.2Mhz; Range 0-15")
+        canTable['tbs1'].comment("time segment1 must be computed to fit the baud rate according to clock 7.2Mhz; Range 0-15")
         canTable.add('tbs2', self.tbs2)
-        canTable['tbs2'].comment("time segment1; Range 0-7")
+        canTable['tbs2'].comment("time segment2; Range 0-7")
         canTable.add('prescaler', self.prescaler)
         canTable['prescaler'].comment("Baud rate prescaler: Range 0-65535")
         
@@ -80,7 +75,7 @@ class GatewayCANChannelConfiguration:
     def __eq__(self, other):
         if self.mystery1!=other.mystery1: return False
         if self.emptyCacheWhenConnected!=other.emptyCacheWhenConnected: return False
-        if self.somethingEveryPacket!=other.somethingEveryPacket: return False
+        if self.numberOfCANBUSPacketsToBuffer!=other.numberOfCANBUSPacketsToBuffer: return False
         if self.timeoutBetween2Packets!=other.timeoutBetween2Packets: return False
         if self.bitrateThousand!=other.bitrateThousand: return False
         if self.tbs1!=other.tbs1: return False
@@ -305,7 +300,7 @@ class ProprietaryConfigFileReader:
         parts=struct.unpack(ProprietaryConfigFileReader.CONFIG_ONE_STRUCT_FORMAT, configurationCANChannelBytes)
         canConfig.mystery1=parts[0]
         canConfig.emptyCacheWhenConnected=parts[1]
-        canConfig.somethingEveryPacket=parts[2] #Range 1-39
+        canConfig.numberOfCANBUSPacketsToBuffer=parts[2] #Range 1-39
         canConfig.timeoutBetween2Packets=parts[3] #Range 12-255
         canConfig.bitrateThousand=parts[4]
         canConfig.tbs1=parts[5]
@@ -328,7 +323,7 @@ class ProprietaryConfigFileReader:
         struct.pack_into(ProprietaryConfigFileReader.CONFIG_ONE_STRUCT_FORMAT, outBytes, 0,
             canConfig.mystery1,
             canConfig.emptyCacheWhenConnected,
-            canConfig.somethingEveryPacket,
+            canConfig.numberOfCANBUSPacketsToBuffer,
             canConfig.timeoutBetween2Packets,
             canConfig.bitrateThousand,
             canConfig.tbs1,
