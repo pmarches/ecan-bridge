@@ -206,7 +206,17 @@ def getBasicInfoFromGateway(udpSocket, deviceIpAndPort):
     macAddress=parseMacAddressFromGateway(data)
     return (ipAndPort[0], macAddress)
 
-def discoverECanGatewaysAllInterfaces():
+def discoverGatewayByName(nameToSearch):
+    allNetworkInterfaces=os.listdir('/sys/class/net/')
+    for n in allNetworkInterfaces:
+        gatewayIpAndMac=discoverECanGateways(n)
+        if gatewayIpAndMac:
+            gatewayName=getGatewayName(gatewayIpAndMac[0])
+            if(nameToSearch==gatewayName):
+                return gatewayIpAndMac
+    return None
+    
+def discoverOneECanGatewaysAllInterfaces():
     allNetworkInterfaces=os.listdir('/sys/class/net/')
     for n in allNetworkInterfaces:
         ipAndMac=discoverECanGateways(n)
@@ -216,7 +226,7 @@ def discoverECanGatewaysAllInterfaces():
 
 def discoverECanGateways(interfaceName):
     if(interfaceName is None):
-        return discoverECanGatewaysAllInterfaces()
+        return discoverOneECanGatewaysAllInterfaces()
     
     debug('Searching for ECAN-E01 gateway on interface %s', interfaceName)
     udpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -282,7 +292,7 @@ class ProprietaryConfigFileReader:
         config.reportTargetPort=parts[17]
         config.reconnectionTimeout=parts[18]
         config.noCANDataAutoReboot=parts[19]
-        
+    
     def buildConfigurationZero(config):
         macadressBytes=binascii.unhexlify(config.macadress.replace(':',''))
         outBytes=bytearray().zfill(240)
@@ -395,6 +405,14 @@ def getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, configura
         warn("FAILED checksum computedChecksum %04X rxChecksum=%04X", computedChecksum, rxChecksum)
 
     return configBytes;
+
+def getGatewayName(deviceIpAddr):
+    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
+    configuration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
+    config=GatewayConfiguration()
+    ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes, config)
+    udpSocket.close()
+    return config.deviceName
 
 def readConfiguration(deviceIpAddr):
     (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
@@ -579,7 +597,7 @@ if __name__ == '__main__':
                     prog='ecane01-cli',
                     description='CLI app to the ECAN-E01 CANBus over ethernet gateway.\nEXAMPLE: ./ecane01-cli.py bridge -i 192.168.4.101 -p 8881 -c vcan0',
                     epilog='Use at your own risk')
-    parser.add_argument('-d', '--device',  help='Name of the ECAN device')
+    parser.add_argument('-d', '--devicename',  help='Name of the ECAN device')
     parser.add_argument('-n', '--netinterface',  help='Network interface to search for the CANBus gateway')
     parser.add_argument('-c', '--canbus',  default='vcan0', help='The CANBus interface to use locally Default: vcan0')
     parser.add_argument('-i', '--ipaddress', help='IP address of the CANBus gateway')
@@ -600,7 +618,8 @@ if __name__ == '__main__':
     if args.action=='scan':
         (ip,mac)=discoverECanGateways(args.netinterface)
         if ip:
-            print("{}\t{}".format(mac.hex(':'),ip))
+            deviceName=getGatewayName(ip)
+            print("{}\t{}\t{}".format(mac.hex(':'),ip, deviceName))
         else:
             error('Gateway not found')
             exit(1)
@@ -609,8 +628,8 @@ if __name__ == '__main__':
             print(ProprietaryConfigFileReader.parseBinaryConfigurationFile(args.inputfile).totoml())
         elif(args.ipaddress):
             print(readConfiguration(args.ipaddress).totoml())
-        else:
-            (ip,mac)=discoverECanGatewaysAllInterfaces()
+        elif(args.devicename):
+            (ip, _)=discoverGatewayByName(args.devicename)
             if ip is None:
                 error("No ECAN device found on the network")
             else:
@@ -635,7 +654,14 @@ if __name__ == '__main__':
             error("You must specify the gateway address with the -i flag")
             exit(1)            
     elif args.action=='bridge':
-        if(args.canbus and args.ipaddress and args.port):
+        if(args.devicename and args.canbus and args.port):
+            (ip, _)=discoverGatewayByName(args.devicename)
+            if ip is None:
+                error("No ECAN device found on the network")
+            else:
+                doBridge(args.canbus, ip, args.port)
+            exit(1)
+        elif(args.canbus and args.ipaddress and args.port):
             doBridge(args.canbus, args.ipaddress, args.port)
         else:
             error("You must specify the gateway address with the -i flag and its port with the -p flag. The canbus can be specified with -c")
