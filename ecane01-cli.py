@@ -4,7 +4,6 @@ import select
 import binascii
 import struct
 import argparse
-import tomlkit
 import can
 from logging import debug,info,warn,error
 import logging
@@ -381,6 +380,7 @@ def getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, configura
     return configBytes;
 
 def readConfiguration(deviceIpAddr):
+    import tomlkit
     (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
     configuration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
     config=GatewayConfiguration()
@@ -396,6 +396,7 @@ def readConfiguration(deviceIpAddr):
     return config
 
 def writeConfiguration(deviceIpAddr, configObj):
+    import tomlkit
     (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
     outConfiguration0Bytes=ProprietaryConfigFileReader.buildConfigurationZero(configObj)
     writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 0, outConfiguration0Bytes)
