@@ -14,6 +14,7 @@ ECAN_CLIENT_UDP_PORT=1902
 ECAN_GATEWAY_UDP_PORT=1901
 ECAN_GATEWAY_CAN1_TCP_PORT=8881
 ECAN_GATEWAY_CAN2_TCP_PORT=8882
+CONF_NUM_PAGE0=0
 CONF_NUM_PAGE1=2
 CONF_NUM_PAGE2=1
 
@@ -190,6 +191,18 @@ class GatewayConfiguration:
         return True
 
 
+def modbusCrc(msg:str) -> int:
+    crc = 0xFFFF
+    for n in range(len(msg)):
+        crc ^= msg[n]
+        for i in range(8):
+            if crc & 1:
+                crc >>= 1
+                crc ^= 0xA001
+            else:
+                crc >>= 1
+    return crc
+
 def parseMacAddressFromGateway(dataFromGateway):
     debug('parseMacAddressFromGateway : %s',binascii.hexlify(dataFromGateway))
     (magic,action)=struct.unpack('BB', dataFromGateway[0:2])
@@ -198,17 +211,27 @@ def parseMacAddressFromGateway(dataFromGateway):
         return macbytes
     return None
 
-def getBasicInfoFromGateway(udpSocket, deviceIpAndPort):
+def getBasicInfoFromGateway(udpSocket, gatewayIpAndPort):
+    debug('getBasicInfoFromGateway %s', str(gatewayIpAndPort))
     QUERY_PAYLOAD=b'www.cdebyte.comwww.cdebyte.com' #Magic bytes that trigger a response
-    udpSocket.sendto(QUERY_PAYLOAD, deviceIpAndPort)
+    udpSocket.sendto(QUERY_PAYLOAD, gatewayIpAndPort)
 
-    data, ipAndPort = udpSocket.recvfrom(1024)
+    data, ipAndPort = udpSocket.recvfrom(32)
+    debug('got UDP response from %s', str(ipAndPort));
     macAddress=parseMacAddressFromGateway(data)
     return (ipAndPort[0], macAddress)
 
-def discoverGatewayByName(nameToSearch):
+def getNetworkInterfaces():
     allNetworkInterfaces=os.listdir('/sys/class/net/')
-    for n in allNetworkInterfaces:
+    return filter(lambda x: not x.startswith('can') and x!='lo', allNetworkInterfaces)
+    
+def discoverGatewayByName(nameToSearch, netinterface):
+    if netinterface is None:
+        netinterfaceToSearch=getNetworkInterfaces()
+    else:
+        netinterfaceToSearch=[netinterface]
+        
+    for n in netinterfaceToSearch:
         gatewayIpAndMac=discoverECanGateways(n)
         if gatewayIpAndMac:
             gatewayName=getGatewayName(gatewayIpAndMac[0])
@@ -217,24 +240,27 @@ def discoverGatewayByName(nameToSearch):
     return None
     
 def discoverOneECanGatewaysAllInterfaces():
-    allNetworkInterfaces=os.listdir('/sys/class/net/')
-    for n in allNetworkInterfaces:
+    for n in getNetworkInterfaces():
         ipAndMac=discoverECanGateways(n)
         if ipAndMac:
             return ipAndMac
     return None
+
+def createUDPSocket():
+    udpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    udpSocket.bind(('<broadcast>', ECAN_CLIENT_UDP_PORT))
+    udpSocket.settimeout(10)
+    return udpSocket;
 
 def discoverECanGateways(interfaceName):
     if(interfaceName is None):
         return discoverOneECanGatewaysAllInterfaces()
     
     debug('Searching for ECAN-E01 gateway on interface %s', interfaceName)
-    udpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    udpSocket = createUDPSocket()
     udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, bytes(interfaceName, 'ascii'))
-    udpSocket.bind(('<broadcast>', ECAN_CLIENT_UDP_PORT))
-    udpSocket.settimeout(1)
     try:
         ipAndMac=getBasicInfoFromGateway(udpSocket, ('<broadcast>', ECAN_GATEWAY_UDP_PORT))
         udpSocket.close()
@@ -244,26 +270,18 @@ def discoverECanGateways(interfaceName):
 
     return ipAndMac
 
-def connectToGatewayByIp(deviceIpAddr):
-    udpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    udpSocket.bind(('<broadcast>', ECAN_CLIENT_UDP_PORT))
-    udpSocket.settimeout(3)
-    return udpSocket;
-
-def resolveMacAddress(deviceIpAddr):
-    udpSocket = connectToGatewayByIp(deviceIpAddr)
-    udpSocket.settimeout(None)
-    deviceIpAndPort=(deviceIpAddr, ECAN_GATEWAY_UDP_PORT)
-    (_,deviceMacAddress) = getBasicInfoFromGateway(udpSocket, deviceIpAndPort)
-    return (udpSocket,deviceIpAndPort, deviceMacAddress)
+def udpConnectTo(deviceIpAddr):
+    udpSocket = createUDPSocket()
+    #udpSocket.settimeout(None)
+    gatewayIpAndPort=(deviceIpAddr, ECAN_GATEWAY_UDP_PORT)
+    (_,gatewayMacAddress) = getBasicInfoFromGateway(udpSocket, gatewayIpAndPort)
+    return (udpSocket,gatewayIpAndPort, gatewayMacAddress)
 
 class ProprietaryConfigFileReader:
     MAINCONFIG_BYTES_SIZE=240
     CANCHANNEL_BYTE_SIZE=424
-    CONFIG_ZERO_STRUCT_FORMAT='2s32s11sBBBBBB11s26s4s4s4s4sB129sHHH';
-    CONFIG_ONE_STRUCT_FORMAT='BBBBHBBI128sBB2sIIH4s132sH132s'
+    CONFIG_ZERO_STRUCT_FORMAT='<2s32s11sBBBBBB11s26s4s4s4s4sB129sHHH';
+    CONFIG_ONE_STRUCT_FORMAT='<BBBBHBBI128sBB2sIIH4s132sH132s'
     
     def ipBytesToStr(ipBytes):
         return socket.inet_ntoa(ipBytes)
@@ -370,8 +388,7 @@ class ProprietaryConfigFileReader:
     
     def parseBinaryConfigurationFile(inputfilepath):
         with open(inputfilepath, mode='rb') as inputfile:
-            fmt='>II'
-            filemagic1,filemagic2=struct.unpack(fmt, inputfile.read(struct.calcsize(fmt)))
+            filemagic1,filemagic2=struct.unpack('>II', inputfile.read(struct.calcsize(fmt)))
             if(filemagic1!=0x09 or filemagic2!=0xF2):
                 raise Exception('Unknown file format')
             
@@ -386,42 +403,39 @@ class ProprietaryConfigFileReader:
     def convertGatewayConfigurationToBlob(inputConfig):
         pass
 
-def getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, configurationPage):
-    from fastcrc import crc16
+def getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, configurationPage):
     debug('Reading device configuration page %d', configurationPage)
-    getBasicConfigurationCmd=bytearray(b'\xfe\x00')
-    getBasicConfigurationCmd.extend(deviceMacAddress)
-    getBasicConfigurationCmd.extend(struct.pack('>H', configurationPage))
-    udpSocket.sendto(getBasicConfigurationCmd, deviceIpAndPort)
+    basicConfigurationCmd=bytearray(b'\xfe\x00')
+    basicConfigurationCmd.extend(gatewayMacAddress)
+    basicConfigurationCmd.extend(struct.pack('>H', configurationPage))
 
-    responseBytes, addr = udpSocket.recvfrom(1024)
-    debug('Got %d bytes of config data', len(responseBytes))
-    debug('responseBytes %s', binascii.hexlify(responseBytes))
-    magic, action, macAddress, configurationSection, rxChecksum=struct.unpack('BB6s2sH', responseBytes[0:12])
+    expectedResponseLen=252 if configurationPage==0 else 436
+    (responseBytes, addr) = sendBytesWaitForResponse(udpSocket, gatewayIpAndPort, basicConfigurationCmd, expectedResponseLen)
+    magic, action, macAddress, configurationSection, rxChecksum=struct.unpack('<BB6s2sH', responseBytes[0:12])
     
     configBytes=responseBytes[12:]
-    computedChecksum=crc16.modbus(configBytes)
+    computedChecksum=modbusCrc(configBytes)
     if(computedChecksum!=rxChecksum):
         warn("FAILED checksum computedChecksum %04X rxChecksum=%04X", computedChecksum, rxChecksum)
 
     return configBytes;
 
 def getGatewayName(deviceIpAddr):
-    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
-    configuration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
+    (udpSocket,gatewayIpAndPort, gatewayMacAddress)=udpConnectTo(deviceIpAddr)
+    configuration0Bytes=getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, 0)
     config=GatewayConfiguration()
     ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes, config)
     udpSocket.close()
     return config.deviceName
 
 def readConfiguration(deviceIpAddr):
-    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
-    configuration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
+    (udpSocket,gatewayIpAndPort, gatewayMacAddress)=udpConnectTo(deviceIpAddr)
+    configuration0Bytes=getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, CONF_NUM_PAGE0)
     config=GatewayConfiguration()
     ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes, config)
 
-    inConfiguration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, CONF_NUM_PAGE1)
-    inConfiguration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, CONF_NUM_PAGE2)
+    inConfiguration1Bytes=getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, CONF_NUM_PAGE1)
+    inConfiguration2Bytes=getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, CONF_NUM_PAGE2)
 
     ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration1Bytes, config.can1)
     ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration2Bytes, config.can2)
@@ -430,85 +444,52 @@ def readConfiguration(deviceIpAddr):
     return config
 
 def writeConfiguration(deviceIpAddr, configObj):
-    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
+    (udpSocket,gatewayIpAndPort, gatewayMacAddress)=udpConnectTo(deviceIpAddr)
     outConfiguration0Bytes=ProprietaryConfigFileReader.buildConfigurationZero(configObj)
-    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, 0, outConfiguration0Bytes)
+    writeConfigurationPage(udpSocket, gatewayIpAndPort, gatewayMacAddress, 0, outConfiguration0Bytes)
     outConfiguration1Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(configObj.can1)
-    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, CONF_NUM_PAGE1, outConfiguration1Bytes)
+    writeConfigurationPage(udpSocket, gatewayIpAndPort, gatewayMacAddress, CONF_NUM_PAGE1, outConfiguration1Bytes)
     outConfiguration2Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(configObj.can2)
-    writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, CONF_NUM_PAGE2, outConfiguration2Bytes)
+    writeConfigurationPage(udpSocket, gatewayIpAndPort, gatewayMacAddress, CONF_NUM_PAGE2, outConfiguration2Bytes)
 
-def writeConfigurationPage(udpSocket, deviceIpAndPort, deviceMacAddress, configurationPage, configBytes):
-    from fastcrc import crc16
+def sendBytesWaitForResponse(udpSocket, ipAndPort, cmdBytes, expectedResponseLen):
+    debug(f'cmdBytes len {len(cmdBytes)}')
+    debug('cmdBytes %s', binascii.hexlify(cmdBytes))
+    udpSocket.sendto(cmdBytes, ipAndPort)
+
+    while True:
+        responseBytes, addr = udpSocket.recvfrom(512)
+        debug(f'responseBytes len {len(responseBytes)} from {addr}')
+        debug('responseBytes %s', binascii.hexlify(responseBytes))
+        if(len(responseBytes)!=expectedResponseLen):
+            warn('Ignoring out of order response. We are waiting for %d bytes', expectedResponseLen)
+        else:
+            return (responseBytes, addr)
+
+def writeConfigurationPage(udpSocket, gatewayIpAndPort, gatewayMacAddress, configurationPage, configBytes):
     debug('Writing configuration page %d', configurationPage)
     writeConfigurationPageCmd=bytearray(b'\xfe\x01')
-    writeConfigurationPageCmd.extend(deviceMacAddress)
+    writeConfigurationPageCmd.extend(gatewayMacAddress)
     writeConfigurationPageCmd.extend(struct.pack('>H', configurationPage))
-    computedChecksum=crc16.modbus(configBytes)
+    computedChecksum=modbusCrc(configBytes)
     writeConfigurationPageCmd.extend(struct.pack('H', computedChecksum))
     writeConfigurationPageCmd.extend(configBytes)
 
-    debug(f'writeConfigurationPageCmd len {len(writeConfigurationPageCmd)}')
-    debug('writeConfigurationPageCmd %s', binascii.hexlify(writeConfigurationPageCmd))
-    udpSocket.sendto(writeConfigurationPageCmd, ('<broadcast>', ECAN_GATEWAY_UDP_PORT))
-    time.sleep(1)
-    responseBytes, addr = udpSocket.recvfrom(128)
-    debug(f'responseBytes len {len(responseBytes)}')
-    debug('responseBytes %s', binascii.hexlify(responseBytes))
+    (responseBytes, addr) = sendBytesWaitForResponse(udpSocket, gatewayIpAndPort, writeConfigurationPageCmd, 12)
     if(len(responseBytes)!=12):
         warn(f'exptected responseBytes to be 12 bytes long. was {len(responseBytes)} long')
     
 
-def testWriteConfiguration(deviceIpAddr):
-    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
-    inConfiguration0Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 0)
-    originalConfigObj=GatewayConfiguration()
-    ProprietaryConfigFileReader.parseConfigurationZero(inConfiguration0Bytes, originalConfigObj)
-
-    inConfiguration1Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 2)
-    ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration1Bytes, originalConfigObj.can1)
-
-    inConfiguration2Bytes=getConfigurationPage(udpSocket, deviceMacAddress, deviceIpAndPort, 1)
-    ProprietaryConfigFileReader.parseConfigurationCANChannel(inConfiguration2Bytes, originalConfigObj.can2)
-
-    udpSocket.close()
-    userConfigObj=GatewayConfiguration.fromTOML(originalConfigObj.totoml())
-    if(userConfigObj != originalConfigObj):
-        error('userConfigObj=%s', userConfigObj.totoml());
-        error('---------')
-        error('originalConfigObj=%s', originalConfigObj.totoml());
-        raise Exception("toml serialization does not yield the same object")
-        
-
-    outConfiguration0Bytes=ProprietaryConfigFileReader.buildConfigurationZero(userConfigObj)
-    if(inConfiguration0Bytes!=outConfiguration0Bytes):
-        error(' inConfiguration0Bytes %s', binascii.hexlify(inConfiguration0Bytes))
-        error('outConfiguration0Bytes %s', binascii.hexlify(outConfiguration0Bytes))
-        raise Exception("inoutConfiguration0Bytes differ")
-    outConfiguration1Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(userConfigObj.can1)
-    if(inConfiguration1Bytes!=outConfiguration1Bytes):
-        error(' inConfiguration1Bytes %s', binascii.hexlify(inConfiguration1Bytes))
-        error('outConfiguration1Bytes %s', binascii.hexlify(outConfiguration1Bytes))
-        raise Exception("inoutConfiguration1Bytes differ")
-    outConfiguration2Bytes=ProprietaryConfigFileReader.buildConfigurationCANChannel(userConfigObj.can2)
-    if(inConfiguration2Bytes!=outConfiguration2Bytes):
-        error(' inConfiguration2Bytes %s', binascii.hexlify(inConfiguration2Bytes))
-        error('outConfiguration2Bytes %s', binascii.hexlify(outConfiguration2Bytes))
-        raise Exception("inoutConfiguration2Bytes differ")
-
-    
 def rebootGateway(deviceIpAddr):
-    (udpSocket,deviceIpAndPort, deviceMacAddress)=resolveMacAddress(deviceIpAddr)
+    (udpSocket,gatewayIpAndPort, gatewayMacAddress)=udpConnectTo(deviceIpAddr)
     
     rebootCmd=bytearray(b'\xfe\x03')
-    rebootCmd.extend(deviceMacAddress)
+    rebootCmd.extend(gatewayMacAddress)
     info('Rebooting %s',deviceIpAddr);
-    udpSocket.sendto(rebootCmd, deviceIpAndPort)
-    rebootResponse, addr = udpSocket.recvfrom(1024)
-    #debug('RX', addr, ' ',binascii.hexlify(rebootResponse))
-    
+    (rebootResponse, addr) = sendBytesWaitForResponse(udpSocket, gatewayIpAndPort, rebootCmd, 10)
+
     expectedRebootResponse=bytearray(b'\xfd\x03')
-    expectedRebootResponse.extend(deviceMacAddress)
+    expectedRebootResponse.extend(gatewayMacAddress)
     expectedRebootResponse.extend(b'\x09\x00')
     if rebootResponse!=expectedRebootResponse:
         error('Unexpected reboot response', binascii.hexlify(rebootResponse))
@@ -539,16 +520,16 @@ def convertGatewayFormatToCANBusFrame(gatewayFormatBytes):
     debug("gateway format to canbus yields message: %s", msg)
     return msg
 
-def createSocketToGateway(gatewayAddress, gatewayPort):
+def createTCPSocketToGateway(gatewayAddress, gatewayPort):
     sockettogateway=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #sockettogateway.settimeout(10)
+    sockettogateway.settimeout(10)
     sockettogateway.connect((gatewayAddress, gatewayPort))
     sockettogateway.setblocking(False)
     return sockettogateway
     
 def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
     info("Starting bridge on virtual can device %s and gateway %s port %d", canInterfaceName, gatewayAddress, gatewayPort)
-    sockettogateway=createSocketToGateway(gatewayAddress, gatewayPort)
+    sockettogateway=createTCPSocketToGateway(gatewayAddress, gatewayPort)
     
     try:
         bus = can.interface.Bus(bustype='socketcan', channel=canInterfaceName)
@@ -629,7 +610,7 @@ if __name__ == '__main__':
         elif(args.ipaddress):
             print(readConfiguration(args.ipaddress).totoml())
         elif(args.devicename):
-            (ip, _)=discoverGatewayByName(args.devicename)
+            (ip, _)=discoverGatewayByName(args.devicename, args.netinterface)
             if ip is None:
                 error("No ECAN device found on the network")
             else:
@@ -655,7 +636,7 @@ if __name__ == '__main__':
             exit(1)            
     elif args.action=='bridge':
         if(args.devicename and args.canbus and args.port):
-            (ip, _)=discoverGatewayByName(args.devicename)
+            (ip, _)=discoverGatewayByName(args.devicename, args.netinterface)
             if ip is None:
                 error("No ECAN device found on the network")
             else:
@@ -673,9 +654,7 @@ if __name__ == '__main__':
             error("You must specify the gateway address with the -i flag and its port with the -p flag")
             exit(1)
     elif args.action=='test':
-        if(args.ipaddress):
-            testWriteConfiguration(args.ipaddress)
-        else:
-            error("You must specify the gateway address with the -i flag")
-            exit(1)            
-        
+        (udpSocket,gatewayIpAndPort, gatewayMacAddress)=udpConnectTo(args.ipaddress)
+        configuration0Bytes=getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, 0)
+        config=GatewayConfiguration()
+        ProprietaryConfigFileReader.parseConfigurationZero(configuration0Bytes, config)

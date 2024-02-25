@@ -2,6 +2,12 @@ This is a python CLI program to configure the ECAN-E01 CANBus to ethernet gatewa
 
 ![ECAN-E01 product image](ECAN-E01-product.webp)
 
+Installing on victron OctoGX
+---
+```
+opkg install python3-pip python3-can
+```
+
 Discovering the gateway
 ---
 ```
