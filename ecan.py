@@ -5,7 +5,7 @@ import binascii
 import struct
 import argparse
 import can
-from logging import debug,info,warn,error
+from logging import debug,info,warning,error
 import logging
 import time
 import os
@@ -416,7 +416,7 @@ def getConfigurationPage(udpSocket, gatewayMacAddress, gatewayIpAndPort, configu
     configBytes=responseBytes[12:]
     computedChecksum=modbusCrc(configBytes)
     if(computedChecksum!=rxChecksum):
-        warn("FAILED checksum computedChecksum %04X rxChecksum=%04X", computedChecksum, rxChecksum)
+        warning("FAILED checksum computedChecksum %04X rxChecksum=%04X", computedChecksum, rxChecksum)
 
     return configBytes;
 
@@ -462,7 +462,7 @@ def sendBytesWaitForResponse(udpSocket, ipAndPort, cmdBytes, expectedResponseLen
         debug(f'responseBytes len {len(responseBytes)} from {addr}')
         debug('responseBytes %s', binascii.hexlify(responseBytes))
         if(len(responseBytes)!=expectedResponseLen):
-            warn('Ignoring out of order response. We are waiting for %d bytes', expectedResponseLen)
+            warning(f'Ignoring out of order response. We are waiting for {expectedResponseLen} bytes')
         else:
             return (responseBytes, addr)
 
@@ -477,7 +477,7 @@ def writeConfigurationPage(udpSocket, gatewayIpAndPort, gatewayMacAddress, confi
 
     (responseBytes, addr) = sendBytesWaitForResponse(udpSocket, gatewayIpAndPort, writeConfigurationPageCmd, 12)
     if(len(responseBytes)!=12):
-        warn(f'exptected responseBytes to be 12 bytes long. was {len(responseBytes)} long')
+        warning(f'exptected responseBytes to be 12 bytes long. was {len(responseBytes)} long')
     
 
 def rebootGateway(deviceIpAddr):
