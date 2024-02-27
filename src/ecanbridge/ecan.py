@@ -226,6 +226,7 @@ def getNetworkInterfaces():
     return filter(lambda x: not x.startswith('can') and x!='lo', allNetworkInterfaces)
     
 def discoverGatewayByName(nameToSearch, netinterface):
+    debug(f'discoverGatewayByName nameToSearch={nameToSearch}')
     if netinterface is None:
         netinterfaceToSearch=getNetworkInterfaces()
     else:
@@ -235,9 +236,10 @@ def discoverGatewayByName(nameToSearch, netinterface):
         gatewayIpAndMac=discoverECanGateways(n)
         if gatewayIpAndMac:
             gatewayName=getGatewayName(gatewayIpAndMac[0])
+            debug(f'gatewayName={gatewayName}')
             if(nameToSearch==gatewayName):
                 return gatewayIpAndMac
-    return None
+    return (None, None)
     
 def discoverOneECanGatewaysAllInterfaces():
     for n in getNetworkInterfaces():
