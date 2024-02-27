@@ -1,6 +1,6 @@
 [project]
-name = "ecan-bridge"
-version = "0.1.0"
+name = "ecanbridge"
+version = "0.2.0"
 authors = [
   { name="Philippe Marchesseault", email="pmarches@gmail.com" },
 ]
