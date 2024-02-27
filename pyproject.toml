@@ -1,10 +1,10 @@
 [project]
-name = "ecanbridge"
+name = "ebyteecan"
 version = "0.2.0"
 authors = [
   { name="Philippe Marchesseault", email="pmarches@gmail.com" },
 ]
-description = "Tools for ECAN-E01 CANBus to ethernet gateway"
+description = "Tools for EBytes's ECAN-E01 CANBus to ethernet gateway"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
