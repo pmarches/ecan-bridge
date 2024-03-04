@@ -8,6 +8,11 @@ Installing on victron OctoGX
 opkg install python3-pip python3-can
 ```
 
+TBD: The virtual can interface should be enabled or disabled? If enabled, the venusOS will emit PGNs on it. If disabled, the vcan interface is down at boot time. Need to add some code to bring it up.
+```
+ifconfig vcan1 up
+```
+
 Discovering the gateway
 ---
 ```

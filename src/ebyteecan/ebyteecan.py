@@ -7,6 +7,7 @@ import can
 from logging import debug,info,warning,error
 import time
 import os
+import threading
 
 ECAN_CLIENT_UDP_PORT=1902
 ECAN_GATEWAY_UDP_PORT=1901
@@ -220,6 +221,7 @@ def getBasicInfoFromGateway(udpSocket, gatewayIpAndPort):
     return (ipAndPort[0], macAddress)
 
 def getNetworkInterfaces():
+    #TODO: I should filter on the content of the file /sys/class/net/*/type : If the type is 1 I should broadcast on it
     allNetworkInterfaces=os.listdir('/sys/class/net/')
     return filter(lambda x: not x.startswith('can') and x!='lo', allNetworkInterfaces)
     
@@ -529,47 +531,65 @@ def createTCPSocketToGateway(gatewayAddress, gatewayPort):
     
 def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
     info("Starting bridge on virtual can device %s and gateway %s port %d", canInterfaceName, gatewayAddress, gatewayPort)
-    sockettogateway=createTCPSocketToGateway(gatewayAddress, gatewayPort)
     
     try:
         bus = can.interface.Bus(bustype='socketcan', channel=canInterfaceName)
-        BOTH_SOCKETS=[sockettogateway,bus]
-        while(True):
-            readyTriplet=select.select(BOTH_SOCKETS, [], [], None)
-            #print(readyTriplet)
-            for readySocket in readyTriplet[0]:
-                if(sockettogateway==readySocket):
-                    DATA_FRAME_LEN=13
-                    gatewayFormatFrame=sockettogateway.recv(DATA_FRAME_LEN)
-                    if(len(gatewayFormatFrame)>0):
-                        while(len(gatewayFormatFrame)<DATA_FRAME_LEN):
-                            gatewayFormatFrame+=sockettogateway.recv(DATA_FRAME_LEN-len(gatewayFormatFrame))
-                    debug("Got a data frame from the gateway: %s", str(binascii.hexlify(gatewayFormatFrame)))
-                    if(len(gatewayFormatFrame)==DATA_FRAME_LEN):
-                        msg=convertGatewayFormatToCANBusFrame(gatewayFormatFrame)
-                        bus.send(msg)
-                    else:
-                        raise Exception("Incompleted gateway message received")
-                else:
-                    CANBusFrame=bus.recv(0)
-                    if(CANBusFrame is None):
-                        debug(f"No data to read on the canbus side.")
-                    elif(CANBusFrame.arbitration_id==0):
-                        pass
-                    else:
-                        debug("Got %s from canbus", CANBusFrame)
-                        gatewayCompatibleBytes=convertCANBusFrameToGatewayFormat(CANBusFrame)
-                        sockettogateway.send(gatewayCompatibleBytes)
-
-        bus.shutdown()
     except OSError as e:
         if(e.errno==19):
-            error("No such network interface {canInterfaceName}. Maybe you need to configure it with these commands:")
+            error(f"No such network interface {canInterfaceName}. Maybe you need to configure it with these commands:")
             print("sudo modprobe vcan");
-            print(f"sudo ip link add dev {canInterfaceName} type vcan bitrate 250000 mtu 16")
+            print(f"sudo ip link add dev {canInterfaceName} type vcan")
             print(f"sudo ip link set up {canInterfaceName}")
-        else:
-            print(e)
-        
-    sockettogateway.close()
+        return
 
+    while(True):
+        try:
+            sockettogateway=createTCPSocketToGateway(gatewayAddress, gatewayPort)
+            BOTH_SOCKETS=[sockettogateway,bus]
+            while(True):
+                readyTriplet=select.select(BOTH_SOCKETS, [], [], None)
+                #print(readyTriplet)
+                for readySocket in readyTriplet[0]:
+                    if(sockettogateway==readySocket):
+                        DATA_FRAME_LEN=13
+                        gatewayFormatFrame=sockettogateway.recv(DATA_FRAME_LEN)
+                        if(len(gatewayFormatFrame)>0):
+                            while(len(gatewayFormatFrame)<DATA_FRAME_LEN):
+                                gatewayFormatFrame+=sockettogateway.recv(DATA_FRAME_LEN-len(gatewayFormatFrame))
+                        debug("Got a data frame from the gateway: %s", str(binascii.hexlify(gatewayFormatFrame)))
+                        if(len(gatewayFormatFrame)==DATA_FRAME_LEN):
+                            msg=convertGatewayFormatToCANBusFrame(gatewayFormatFrame)
+                            bus.send(msg)
+                        else:
+                            raise Exception("Incompleted gateway message received")
+                    else:
+                        CANBusFrame=bus.recv(0)
+                        if(CANBusFrame is None):
+                            debug(f"No data to read on the canbus side.")
+                        elif(CANBusFrame.arbitration_id==0):
+                            pass
+                        else:
+                            debug("Got %s from canbus", CANBusFrame)
+                            gatewayCompatibleBytes=convertCANBusFrameToGatewayFormat(CANBusFrame)
+                            sockettogateway.send(gatewayCompatibleBytes)
+        except OSError as e:
+            print(e)
+        sockettogateway.close()
+        
+    bus.shutdown()
+
+def startLinkBridgeThread(transport,deviceName,port,canInterface):
+    info('transport=%s,deviceName=%s,port=%d,canInterface=%s', transport,deviceName,port,canInterface)
+    (ip, _)=discoverGatewayByName(deviceName, 'wlp59s0')
+    if ip is None:
+        error('Unable to resolve IP of gateway named %s', deviceName)
+        return
+        
+    if(transport.lower()=='tcp'):
+        #doBridge(canInterface, ip, port)
+        bridgeThread = threading.Thread(target=doBridge, args=(canInterface, ip, port))
+        #bridgeThread.daemon=True
+        bridgeThread.start()
+
+    elif(transport.lower()=='udp'):
+        print(deviceName,port,canInterface)

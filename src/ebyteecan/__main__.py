@@ -1,7 +1,11 @@
 import argparse
 from logging import debug,info,warning,error
 import logging
-import ebyteecan
+from ebyteecan import ebyteecan
+
+#Examples
+#bridge -u -d A0001 -p 8881 -c vcan1
+#bridge -a udp:A0001:8881:vcan1 -a tcp:A0001:8882:vcan2
 
 parser = argparse.ArgumentParser(
                 prog='ecane01-cli',
@@ -14,6 +18,7 @@ parser.add_argument('-i', '--ipaddress', help='IP address of the CANBus gateway'
 parser.add_argument('-p', '--port', type=int, default=ebyteecan.ECAN_GATEWAY_CAN1_TCP_PORT, help='TCP port of the CANBus gateway')
 parser.add_argument('-f', '--inputfile', help='TOML Configuration file to be used as input')
 parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbose output')
+parser.add_argument('-l', '--link', action='append', help='Add a new link to the bridge')
 parser.add_argument('action', choices=['scan','reboot','readconf','writeconf','bridge', 'capture', 'test'])
 args = parser.parse_args()
 if(args.verbose==0):
@@ -73,6 +78,10 @@ elif args.action=='bridge':
         exit(1)
     elif(args.canbus and args.ipaddress and args.port):
         ebyteecan.doBridge(args.canbus, args.ipaddress, args.port)
+    elif(args.link):
+        for link in args.link:
+            (transport,deviceName,port,canInterface)=link.split(':')
+            ebyteecan.startLinkBridgeThread(transport,deviceName,int(port),canInterface)
     else:
         error("You must specify the gateway address with the -i flag and its port with the -p flag. The canbus can be specified with -c")
         exit(1)
