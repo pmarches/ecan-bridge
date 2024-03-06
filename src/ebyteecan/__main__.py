@@ -18,7 +18,7 @@ parser.add_argument('-i', '--ipaddress', help='IP address of the CANBus gateway'
 parser.add_argument('-p', '--port', type=int, default=ebyteecan.ECAN_GATEWAY_CAN1_TCP_PORT, help='TCP port of the CANBus gateway')
 parser.add_argument('-f', '--inputfile', help='TOML Configuration file to be used as input')
 parser.add_argument('-v', '--verbose', action='count', default=0, help='Verbose output')
-parser.add_argument('-l', '--link', action='append', help='Add a new link to the bridge')
+parser.add_argument('-l', '--link', action='append', help='Add a new link to the bridge. Example: tcp:A0001:8882:vcan2')
 parser.add_argument('action', choices=['scan','reboot','readconf','writeconf','bridge', 'capture', 'test'])
 args = parser.parse_args()
 if(args.verbose==0):
@@ -30,15 +30,29 @@ else:
 
 debug(args)
 
+
 if args.action=='scan':
     (ip,mac)=ebyteecan.discoverECanGateways(args.netinterface)
     if ip:
         deviceName=ebyteecan.getGatewayName(ip)
         print("{}\t{}\t{}".format(mac.hex(':'),ip, deviceName))
+        exit(0)
     else:
         error('Gateway not found')
         exit(1)
-elif args.action=='readconf':
+
+#All actions below require either -d or -i
+if(args.devicename):
+    (gatewayIP, gatewayMAC)=ebyteecan.discoverGatewayByName(args.devicename, args.netinterface)
+elif(args.ipaddress):
+    pass
+elif(args.link):
+    pass
+else:
+    error("Error: You must specify either -d or -i, except for the 'scan' action")
+    exit(1);
+
+if args.action=='readconf':
     if(args.inputfile):
         print(ebyteecan.ProprietaryConfigFileReader.parseBinaryConfigurationFile(args.inputfile).totoml())
     elif(args.ipaddress):

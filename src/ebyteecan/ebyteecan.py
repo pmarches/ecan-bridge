@@ -19,8 +19,9 @@ CONF_NUM_PAGE2=1
 
 class GatewayCANChannelConfiguration:
     def fromTOML(doc):
+        import tomlkit
         obj=GatewayCANChannelConfiguration()
-        obj.mystery1=doc['mystery1']
+        obj.closeQuietConnectionAfterSeconds=doc['closeQuietConnectionAfterSeconds']
         obj.emptyCacheWhenConnected=doc['emptyCacheWhenConnected']
         obj.numberOfCANBUSPacketsToBuffer=doc['numberOfCANBUSPacketsToBuffer']
         obj.timeoutBetween2Packets=doc['timeoutBetween2Packets']
@@ -45,7 +46,9 @@ class GatewayCANChannelConfiguration:
     def totoml(self):
         import tomlkit
         canTable = tomlkit.table()
-        canTable.add('mystery1', self.mystery1)
+        canTable.add('closeQuietConnectionAfterSeconds', self.closeQuietConnectionAfterSeconds)
+        canTable['closeQuietConnectionAfterSeconds'].comment('Described as "short connection" in the documentation. 0 turns off this feature. Range: 2-255 seconds')
+        
         canTable.add('emptyCacheWhenConnected', self.emptyCacheWhenConnected)
         canTable.add('numberOfCANBUSPacketsToBuffer', self.numberOfCANBUSPacketsToBuffer)
         canTable['numberOfCANBUSPacketsToBuffer'].comment("Acumulate this many canbus packets before sending them over the TCP side")
@@ -60,10 +63,14 @@ class GatewayCANChannelConfiguration:
         canTable['prescaler'].comment("Baud rate prescaler: Range 0-65535")
         
         canTable.add('remoteIp', self.remoteIp)
+        canTable['remoteIp'].comment('Used only for client mode')
         canTable.add('remotePort', self.remotePort)
+        canTable['remotePort'].comment('Used only for client mode')
         canTable.add('localPort', self.localPort)
+        canTable['localPort'].comment('In server mode, the port the gateway will listen on')
         canTable.add('mysteryByte', self.mysteryByte)
-        canTable.add('operationMode', self.operationMode) #0=TCP Server,1=TCP Client, 2=UDP SErver 3=UDP Client
+        canTable.add('operationMode', self.operationMode)
+        canTable['operationMode'].comment("0=TCP Client, 1=TCP Server, 2=UDP Client, 3=UDP Server")
         canTable.add('mystery2', bytes.hex(self.mystery2))
         canTable.add('connectionTimeout', self.connectionTimeout)
         canTable.add('mystery3', bytes.hex(self.mystery3))
@@ -73,7 +80,7 @@ class GatewayCANChannelConfiguration:
         return canTable
     
     def __eq__(self, other):
-        if self.mystery1!=other.mystery1: return False
+        if self.closeQuietConnectionAfterSeconds!=other.closeQuietConnectionAfterSeconds: return False
         if self.emptyCacheWhenConnected!=other.emptyCacheWhenConnected: return False
         if self.numberOfCANBUSPacketsToBuffer!=other.numberOfCANBUSPacketsToBuffer: return False
         if self.timeoutBetween2Packets!=other.timeoutBetween2Packets: return False
@@ -100,6 +107,7 @@ class GatewayConfiguration:
         self.can2=GatewayCANChannelConfiguration()
 
     def fromTOML(tomlString):
+        import tomlkit
         doc=tomlkit.parse(tomlString)
         obj=GatewayConfiguration()
         obj.mystery0=binascii.unhexlify(doc['mystery0'])
@@ -253,7 +261,7 @@ def createUDPSocket():
     udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     udpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     udpSocket.bind(('<broadcast>', ECAN_CLIENT_UDP_PORT))
-    udpSocket.settimeout(10)
+    udpSocket.settimeout(3)
     return udpSocket;
 
 def discoverECanGateways(interfaceName):
@@ -343,7 +351,7 @@ class ProprietaryConfigFileReader:
     def parseConfigurationCANChannel(configurationCANChannelBytes, canConfig):
         debug('configurationCANChannelBytes %s', binascii.hexlify(configurationCANChannelBytes))
         parts=struct.unpack(ProprietaryConfigFileReader.CONFIG_ONE_STRUCT_FORMAT, configurationCANChannelBytes)
-        canConfig.mystery1=parts[0]
+        canConfig.closeQuietConnectionAfterSeconds=parts[0]
         canConfig.emptyCacheWhenConnected=parts[1]
         canConfig.numberOfCANBUSPacketsToBuffer=parts[2] #Range 1-39
         canConfig.timeoutBetween2Packets=parts[3] #Range 12-255
@@ -366,7 +374,7 @@ class ProprietaryConfigFileReader:
     def buildConfigurationCANChannel(canConfig):
         outBytes=bytearray().zfill(424)
         struct.pack_into(ProprietaryConfigFileReader.CONFIG_ONE_STRUCT_FORMAT, outBytes, 0,
-            canConfig.mystery1,
+            canConfig.closeQuietConnectionAfterSeconds,
             canConfig.emptyCacheWhenConnected,
             canConfig.numberOfCANBUSPacketsToBuffer,
             canConfig.timeoutBetween2Packets,
@@ -523,6 +531,7 @@ def convertGatewayFormatToCANBusFrame(gatewayFormatBytes):
     return msg
 
 def createTCPSocketToGateway(gatewayAddress, gatewayPort):
+    info('createTCPSocketToGateway %s port %d', gatewayAddress, gatewayPort)
     sockettogateway=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sockettogateway.settimeout(10)
     sockettogateway.connect((gatewayAddress, gatewayPort))
@@ -534,6 +543,7 @@ def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
     
     try:
         bus = can.interface.Bus(bustype='socketcan', channel=canInterfaceName)
+        print(f'bus state={bus.state}')
     except OSError as e:
         if(e.errno==19):
             error(f"No such network interface {canInterfaceName}. Maybe you need to configure it with these commands:")
@@ -545,10 +555,18 @@ def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
     while(True):
         try:
             sockettogateway=createTCPSocketToGateway(gatewayAddress, gatewayPort)
+        except Exception as e:
+            print(e)
+            exit(1)
+            
+        try:
             BOTH_SOCKETS=[sockettogateway,bus]
             while(True):
-                readyTriplet=select.select(BOTH_SOCKETS, [], [], None)
+                readyTriplet=select.select(BOTH_SOCKETS, [], BOTH_SOCKETS, None)
                 #print(readyTriplet)
+                for exceptionSocket in readyTriplet[2]:
+                    error('socket in state of exception %s', str(exceptionSocket))
+
                 for readySocket in readyTriplet[0]:
                     if(sockettogateway==readySocket):
                         DATA_FRAME_LEN=13
@@ -580,16 +598,14 @@ def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
 
 def startLinkBridgeThread(transport,deviceName,port,canInterface):
     info('transport=%s,deviceName=%s,port=%d,canInterface=%s', transport,deviceName,port,canInterface)
-    (ip, _)=discoverGatewayByName(deviceName, 'wlp59s0')
+    (ip, _)=discoverGatewayByName(deviceName, None)
     if ip is None:
         error('Unable to resolve IP of gateway named %s', deviceName)
-        return
+        raise Exception('Unable to resolve gateway name')
         
     if(transport.lower()=='tcp'):
-        #doBridge(canInterface, ip, port)
         bridgeThread = threading.Thread(target=doBridge, args=(canInterface, ip, port))
         #bridgeThread.daemon=True
         bridgeThread.start()
-
     elif(transport.lower()=='udp'):
-        print(deviceName,port,canInterface)
+        raise Exception('Not implemented')
