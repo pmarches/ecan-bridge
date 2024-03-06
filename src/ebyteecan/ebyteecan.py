@@ -531,12 +531,18 @@ def convertGatewayFormatToCANBusFrame(gatewayFormatBytes):
     return msg
 
 def createTCPSocketToGateway(gatewayAddress, gatewayPort):
-    info('createTCPSocketToGateway %s port %d', gatewayAddress, gatewayPort)
-    sockettogateway=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sockettogateway.settimeout(10)
-    sockettogateway.connect((gatewayAddress, gatewayPort))
-    sockettogateway.setblocking(False)
-    return sockettogateway
+    for i in range(0,5):
+        try:
+            info('createTCPSocketToGateway %s port %d', gatewayAddress, gatewayPort)
+            sockettogateway=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sockettogateway.settimeout(10)
+            sockettogateway.connect((gatewayAddress, gatewayPort))
+            sockettogateway.setblocking(False)
+            return sockettogateway
+        except Exception as e:
+            error(e)
+            time.sleep(3)
+    raise Exception('Failed to TCP connect')
     
 def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
     info("Starting bridge on virtual can device %s and gateway %s port %d", canInterfaceName, gatewayAddress, gatewayPort)
