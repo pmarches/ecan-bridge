@@ -81,6 +81,5 @@ TODO
 ---
 
 * Finish parsing the proprietary binary content. In the windows configuration tool, you can save the configuration file. The format is almost the same as the network protocol. Just need to figure out the last few mystery bits
-* The command "writeconf" is not implemented yet. Should be pretty straigh forward, but it requires a bit of testing.
 * Test with multiple gateway devices on the same network. The scan option currently returns only the first response.
-* Async IO
+* 

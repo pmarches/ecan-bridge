@@ -37,8 +37,9 @@ class GatewayCANChannelConfiguration:
         obj.mystery2=bytes.fromhex(doc['mystery2'])
         obj.connectionTimeout=doc['connectionTimeout']
         obj.mystery3=bytes.fromhex(doc['mystery3'])
+        obj.registrationMode=doc['registrationMode']
         obj.registrationMessage=doc['registrationMessage']
-        obj.mystery4=doc['mystery4']
+        obj.keepAliveCycle=doc['keepAliveCycle']
         obj.keepAliveMessage=doc['keepAliveMessage']
         
         return obj
@@ -74,9 +75,15 @@ class GatewayCANChannelConfiguration:
         canTable.add('mystery2', bytes.hex(self.mystery2))
         canTable.add('connectionTimeout', self.connectionTimeout)
         canTable.add('mystery3', bytes.hex(self.mystery3))
+        
+        canTable.add(tomlkit.comment("Registration and keepalive is used only in client mode"))
+        canTable.add('registrationMode', self.registrationMode)
+        canTable['registrationMode'].comment('0=Disable, 1=Send our MAC address upon connection, 2=Send registrationMessage upon connection, 3=Send our MAC address per packet, 4=Send registrationMessage every packet')
         canTable.add('registrationMessage', self.registrationMessage)
-        canTable.add('mystery4', self.mystery4)
+        canTable.add('keepAliveCycle', self.keepAliveCycle)
+        canTable['keepAliveCycle'].comment('Send keep alive message every selected seconds, 0 Disables; Range 1-65535')
         canTable.add('keepAliveMessage', self.keepAliveMessage)
+        canTable['keepAliveMessage'].comment('KeepAlive message to send. Max 128 bytes.')
         return canTable
     
     def __eq__(self, other):
@@ -291,7 +298,7 @@ class ProprietaryConfigFileReader:
     MAINCONFIG_BYTES_SIZE=240
     CANCHANNEL_BYTE_SIZE=424
     CONFIG_ZERO_STRUCT_FORMAT='<2s32s11sBBBBBB11s26s4s4s4s4sB129sHHH';
-    CONFIG_ONE_STRUCT_FORMAT='<BBBBHBBI128sBB2sIIH4s132sH132s'
+    CONFIG_ONE_STRUCT_FORMAT='<BBBBHBBI128sBB2sIIH2sH132sH132s'
     
     def ipBytesToStr(ipBytes):
         return socket.inet_ntoa(ipBytes)
@@ -367,9 +374,10 @@ class ProprietaryConfigFileReader:
         canConfig.localPort=parts[13]
         canConfig.connectionTimeout=parts[14]
         canConfig.mystery3=parts[15]
-        canConfig.registrationMessage=parts[16].decode('ascii').partition('\x00')[0]
-        canConfig.mystery4=parts[17]
-        canConfig.keepAliveMessage=parts[18].decode('ascii').rstrip('\x00')
+        canConfig.registrationMode=parts[16]
+        canConfig.registrationMessage=parts[17].decode('ascii').partition('\x00')[0]
+        canConfig.keepAliveCycle=parts[18]
+        canConfig.keepAliveMessage=parts[19].decode('ascii').rstrip('\x00')
 
     def buildConfigurationCANChannel(canConfig):
         outBytes=bytearray().zfill(424)
@@ -390,8 +398,9 @@ class ProprietaryConfigFileReader:
             canConfig.localPort,
             canConfig.connectionTimeout,
             canConfig.mystery3,
+            canConfig.registrationMode,
             canConfig.registrationMessage.encode('ascii'),
-            canConfig.mystery4,
+            canConfig.keepAliveCycle,
             canConfig.keepAliveMessage.encode('ascii')
         )
         return bytes(outBytes);
@@ -538,6 +547,11 @@ def createTCPSocketToGateway(gatewayAddress, gatewayPort):
             sockettogateway.settimeout(10)
             sockettogateway.connect((gatewayAddress, gatewayPort))
             sockettogateway.setblocking(False)
+            sockettogateway.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            #sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 3600)
+            #sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 75)
+            #sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 9)
+        
             return sockettogateway
         except Exception as e:
             error(e)
@@ -568,10 +582,15 @@ def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
         try:
             BOTH_SOCKETS=[sockettogateway,bus]
             while(True):
+                if(bus.state!=can.BusState.ACTIVE):
+                    error('bus.state = %s', str(bus.state))
+                    break
+                
                 readyTriplet=select.select(BOTH_SOCKETS, [], BOTH_SOCKETS, None)
                 #print(readyTriplet)
                 for exceptionSocket in readyTriplet[2]:
                     error('socket in state of exception %s', str(exceptionSocket))
+                    break
 
                 for readySocket in readyTriplet[0]:
                     if(sockettogateway==readySocket):
@@ -598,6 +617,8 @@ def doBridge(canInterfaceName, gatewayAddress, gatewayPort):
                             sockettogateway.send(gatewayCompatibleBytes)
         except OSError as e:
             print(e)
+            exit(1) #TODO REmove outer loop if we decide to handle errors with a program restart
+            
         sockettogateway.close()
         
     bus.shutdown()
