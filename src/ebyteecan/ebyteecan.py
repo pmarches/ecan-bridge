@@ -3,7 +3,7 @@ import socket
 import select
 import binascii
 import struct
-import can
+#import can
 from logging import debug,info,warning,error
 import time
 import os
@@ -210,6 +210,33 @@ class GatewayConfiguration:
         if self.can1!=other.can1 : return False
         if self.can2!=other.can2 : return False
         return True
+
+
+class GatewayTCPSocket:
+    def connect(self, gatewayIpAndPort):
+        info('createTCPSocketToGateway %s port %d', gatewayIpAndPort.ip, gatewayIpAndPort.port)
+        self.socket=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.settimeout(10)
+        self.socket.connect((gatewayIpAndPort.ip, gatewayIpAndPort.port))
+        self.socket.setblocking(True)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 75)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 9)
+
+    def recv(self):
+        DATA_FRAME_LEN=13
+        gatewayFormatFrame=self.socket.recv(DATA_FRAME_LEN)
+        if(len(gatewayFormatFrame)==DATA_FRAME_LEN):
+            canMsg=convertGatewayFormatToCANBusFrame(gatewayFormatFrame)
+            return canMsg
+        else:
+            raise Exception(f'Unexpected gateway message length received {len(gatewayFormatFrame)}')
+
+class GatewayIpAndPort:
+    def __init__(self, gatewayIp, gatewayPort):
+        self.ip=gatewayIp
+        self.port=gatewayPort
 
 
 def modbusCrc(msg:str) -> int:
@@ -539,12 +566,23 @@ def convertCANBusFrameToGatewayFormat(CANBusFrame):
     return proprietaryFormat
     #return b'\x88\x12\x34\x56\x78\x11\x22\x33\x44\x55\x66\x77\x88'
 
+class CANMessage():
+    def __init__(self, is_extended_id, arbitration_id,data):
+        self.is_extended_id=is_extended_id
+        self.arbitration_id=arbitration_id
+        self.data=data
+
+    def __str__(self):
+        #Timestamp:        0.000000    ID:      6c2    S Rx                DL:  8    c1 18 00 00 00 00 00 00
+        return f'Timestamp: {0.0} ID: {self.arbitration_id:2x} S Rx DL: {len(self.data)} {str(binascii.hexlify(self.data))} '
+
 def convertGatewayFormatToCANBusFrame(gatewayFormatBytes):
     is_extended_id=gatewayFormatBytes[0] & 0b10000000
     payloadLen=gatewayFormatBytes[0] & 0b00001111
     debug("gatewayFormatBytes[0]=%d payloadLen=%d", gatewayFormatBytes[0], payloadLen)
     arbitration_id=int.from_bytes(gatewayFormatBytes[1:5], 'big')
-    msg=can.Message(is_extended_id=is_extended_id, arbitration_id=arbitration_id,data=gatewayFormatBytes[5:5+payloadLen])
+    #msg=can.Message(is_extended_id=is_extended_id, arbitration_id=arbitration_id,data=gatewayFormatBytes[5:5+payloadLen])
+    msg=CANMessage(is_extended_id=is_extended_id, arbitration_id=arbitration_id,data=gatewayFormatBytes[5:5+payloadLen])
     debug("gateway format to canbus yields message: %s", msg)
     return msg
 
@@ -557,9 +595,9 @@ def createTCPSocketToGateway(gatewayAddress, gatewayPort):
             sockettogateway.connect((gatewayAddress, gatewayPort))
             sockettogateway.setblocking(False)
             sockettogateway.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            #sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 3600)
-            #sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 75)
-            #sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 9)
+            sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+            sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 75)
+            sockettogateway.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 9)
         
             return sockettogateway
         except Exception as e:
